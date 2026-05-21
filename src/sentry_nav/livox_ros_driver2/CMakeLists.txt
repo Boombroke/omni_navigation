@@ -119,6 +119,16 @@ target_link_libraries(${PROJECT_NAME}
   ${APR_LIBRARIES}
 )
 
+# Bundled SDK: install beside liblivox_ros_driver2.so and resolve at runtime
+install(FILES ${LIVOX_LIDAR_SDK_LIBRARY}
+  DESTINATION lib
+)
+set_target_properties(${PROJECT_NAME} PROPERTIES
+  INSTALL_RPATH "$ORIGIN"
+  BUILD_WITH_INSTALL_RPATH FALSE
+  INSTALL_RPATH_USE_LINK_PATH FALSE
+)
+
 rclcpp_components_register_node(${PROJECT_NAME}
   PLUGIN "livox_ros::DriverNode"
   EXECUTABLE ${PROJECT_NAME}_node
@@ -134,6 +144,8 @@ if(BUILD_TESTING)
   #set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
+
+ament_environment_hooks(cmake/livox_library_path.sh.in)
 
 ament_auto_package(INSTALL_TO_SHARE
   config
