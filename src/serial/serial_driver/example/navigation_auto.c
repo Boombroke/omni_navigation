@@ -34,12 +34,9 @@
 /* ----------------------------------------------------------------------------
  * Globals
  * ------------------------------------------------------------------------- */
-SendImuPacket Smsg_imu;
-SendChassisFeedbackPacket Smsg_chassis_feedback;
-SendRefereePacket Smsg_referee;
+SendTelemetryPacket Smsg_telemetry;
 
-RecvNavCmdPacket Rmsg_nav_cmd;
-RecvHeartbeatPacket Rmsg_heartbeat;
+RecvControlPacket Rmsg_control;
 
 
 Navigation     g_navigation;
@@ -118,18 +115,11 @@ static uint32_t now_ms(void)
  * ------------------------------------------------------------------------- */
 void Navigation_Init(void)
 {
-memset(&Smsg_imu, 0, sizeof(Smsg_imu));
-  Smsg_imu.header = HDR_TX_IMU;
-  Smsg_imu.len    = 18;
-memset(&Smsg_chassis_feedback, 0, sizeof(Smsg_chassis_feedback));
-  Smsg_chassis_feedback.header = HDR_TX_CHASSIS_FEEDBACK;
-  Smsg_chassis_feedback.len    = 10;
-memset(&Smsg_referee, 0, sizeof(Smsg_referee));
-  Smsg_referee.header = HDR_TX_REFEREE;
-  Smsg_referee.len    = 23;
+memset(&Smsg_telemetry, 0, sizeof(Smsg_telemetry));
+  Smsg_telemetry.header = HDR_TX_TELEMETRY;
+  Smsg_telemetry.len    = 51;
 
-memset(&Rmsg_nav_cmd, 0, sizeof(Rmsg_nav_cmd));
-memset(&Rmsg_heartbeat, 0, sizeof(Rmsg_heartbeat));
+memset(&Rmsg_control, 0, sizeof(Rmsg_control));
 
   memset(&g_navigation, 0, sizeof(g_navigation));
   memset(&g_heartbeat, 0, sizeof(g_heartbeat));
@@ -140,79 +130,48 @@ memset(&Rmsg_heartbeat, 0, sizeof(Rmsg_heartbeat));
  * Send helpers
  * ------------------------------------------------------------------------- */
 
-/* 0x51 send_ImuPacket — 200Hz */
-void send_ImuPacket(void)
+/* 0x50 send_TelemetryPacket — 200Hz */
+void send_TelemetryPacket(void)
 {
-  Smsg_imu.header = HDR_TX_IMU;
-  Smsg_imu.len    = 18;
+  Smsg_telemetry.header = HDR_TX_TELEMETRY;
+  Smsg_telemetry.len    = 51;
 
 
-  /* TODO: connect to project IMU/INS module. Default placeholder = 0. */
+  /* TODO: connect to project IMU/INS module. */
 #ifdef INS_H
-  Smsg_imu.gimbal_pitch     = -INS.Pitch / 57.3f;
-  Smsg_imu.gimbal_yaw       =  INS.Yaw   / 57.3f;
-  Smsg_imu.chassis_pitch    = -INS.Pitch / 57.3f;  /* TODO: replace with chassis IMU pitch */
-  Smsg_imu.chassis_yaw      =  INS.Yaw   / 57.3f;  /* TODO: replace with chassis IMU yaw */
+  Smsg_telemetry.gimbal_pitch  = -INS.Pitch / 57.3f;
+  Smsg_telemetry.gimbal_yaw    =  INS.Yaw   / 57.3f;
+  Smsg_telemetry.chassis_pitch = -INS.Pitch / 57.3f;  /* TODO: replace with chassis IMU pitch */
+  Smsg_telemetry.chassis_yaw   =  INS.Yaw   / 57.3f;  /* TODO: replace with chassis IMU yaw */
 #endif
-  Smsg_imu.mcu_timestamp_ms = (uint16_t)(now_ms() & 0xFFFF);
-
-
-  Append_CRC16_Check_Sum_Buf((uint8_t *)&Smsg_imu, sizeof(Smsg_imu));
-  memcpy(s_usb_tx_buf, &Smsg_imu, sizeof(Smsg_imu));
-  CDC_Transmit_FS(s_usb_tx_buf, sizeof(Smsg_imu));
-}
-
-/* 0x52 send_ChassisFeedbackPacket — 20Hz */
-void send_ChassisFeedbackPacket(void)
-{
-  Smsg_chassis_feedback.header = HDR_TX_CHASSIS_FEEDBACK;
-  Smsg_chassis_feedback.len    = 10;
-
-
-  /* TODO: connect to referee.h Robot_Status / Projectile_Allowance / ModeControl */
+  Smsg_telemetry.mcu_timestamp_ms = (uint16_t)(now_ms() & 0xFFFF);
+  /* TODO: connect to referee.h / ModeControl — use cached values, refresh at 1Hz elsewhere */
 #ifdef REFEREE_H
-  Smsg_chassis_feedback.current_hp                = Robot_Status.current_HP;
-  Smsg_chassis_feedback.projectile_allowance_17mm = Projectile_Allowance.projectile_allowance_17mm;
+  Smsg_telemetry.current_hp                = Robot_Status.current_HP;
+  Smsg_telemetry.projectile_allowance_17mm = Projectile_Allowance.projectile_allowance_17mm;
+  Smsg_telemetry.game_progress             = Game_Status.game_progress;
+  Smsg_telemetry.stage_remain_time       = Game_Status.stage_remain_time;
+  Smsg_telemetry.team_colour             = (Robot_Status.robot_id < 100) ? 1 : 0;
+  Smsg_telemetry.rfid_base               = (RFID_Status.rfid_status == 1) ? 1 : 0;
+  Smsg_telemetry.ally_1_robot_hp         = Game_Robot_HP.ally_1_robot_HP;
+  Smsg_telemetry.ally_2_robot_hp         = Game_Robot_HP.ally_2_robot_HP;
+  Smsg_telemetry.ally_3_robot_hp         = Game_Robot_HP.ally_3_robot_HP;
+  Smsg_telemetry.ally_4_robot_hp         = Game_Robot_HP.ally_4_robot_HP;
+  Smsg_telemetry.ally_7_robot_hp         = Game_Robot_HP.ally_7_robot_HP;
+  Smsg_telemetry.ally_outpost_hp         = Game_Robot_HP.ally_outpost_HP;
+  Smsg_telemetry.ally_base_hp            = Game_Robot_HP.ally_base_HP;
+  Smsg_telemetry.event_data              = Game_Status.event_data;
 #endif
 #ifdef MODE_CONTROL_H
-  Smsg_chassis_feedback.chassis_power = ModeControl_GetChassisPower();
-  Smsg_chassis_feedback.chassis_mode  = (uint8_t)ModeControl_GetChassisMode();
+  Smsg_telemetry.chassis_power = ModeControl_GetChassisPower();
+  Smsg_telemetry.chassis_mode  = (uint8_t)ModeControl_GetChassisMode();
 #endif
-  Smsg_chassis_feedback.reserved = 0;
+  Smsg_telemetry.reserved = 0;
 
 
-  Append_CRC16_Check_Sum_Buf((uint8_t *)&Smsg_chassis_feedback, sizeof(Smsg_chassis_feedback));
-  memcpy(s_usb_tx_buf, &Smsg_chassis_feedback, sizeof(Smsg_chassis_feedback));
-  CDC_Transmit_FS(s_usb_tx_buf, sizeof(Smsg_chassis_feedback));
-}
-
-/* 0x53 send_RefereePacket — 1Hz */
-void send_RefereePacket(void)
-{
-  Smsg_referee.header = HDR_TX_REFEREE;
-  Smsg_referee.len    = 23;
-
-
-  /* TODO: connect to referee.h Game_Status / Game_Robot_HP / event */
-#ifdef REFEREE_H
-  Smsg_referee.game_progress     = Game_Status.game_progress;
-  Smsg_referee.stage_remain_time = Game_Status.stage_remain_time;
-  Smsg_referee.team_colour       = (Robot_Status.robot_id < 100) ? 1 : 0;
-  Smsg_referee.rfid_base         = (RFID_Status.rfid_status == 1) ? 1 : 0;
-  Smsg_referee.ally_1_robot_hp   = Game_Robot_HP.ally_1_robot_HP;
-  Smsg_referee.ally_2_robot_hp   = Game_Robot_HP.ally_2_robot_HP;
-  Smsg_referee.ally_3_robot_hp   = Game_Robot_HP.ally_3_robot_HP;
-  Smsg_referee.ally_4_robot_hp   = Game_Robot_HP.ally_4_robot_HP;
-  Smsg_referee.ally_7_robot_hp   = Game_Robot_HP.ally_7_robot_HP;
-  Smsg_referee.ally_outpost_hp   = Game_Robot_HP.ally_outpost_HP;
-  Smsg_referee.ally_base_hp      = Game_Robot_HP.ally_base_HP;
-  Smsg_referee.event_data        = Game_Status.event_data;
-#endif
-
-
-  Append_CRC16_Check_Sum_Buf((uint8_t *)&Smsg_referee, sizeof(Smsg_referee));
-  memcpy(s_usb_tx_buf, &Smsg_referee, sizeof(Smsg_referee));
-  CDC_Transmit_FS(s_usb_tx_buf, sizeof(Smsg_referee));
+  Append_CRC16_Check_Sum_Buf((uint8_t *)&Smsg_telemetry, sizeof(Smsg_telemetry));
+  memcpy(s_usb_tx_buf, &Smsg_telemetry, sizeof(Smsg_telemetry));
+  CDC_Transmit_FS(s_usb_tx_buf, sizeof(Smsg_telemetry));
 }
 
 
@@ -231,28 +190,21 @@ static void parse_frame(const uint8_t *data, uint32_t total_len)
   }
 
   switch (header) {
-case HDR_RX_NAV_CMD: {
-      if (sizeof(RecvNavCmdPacket) != total_len) return;
-      memcpy(&Rmsg_nav_cmd, data, sizeof(RecvNavCmdPacket));
+case HDR_RX_CONTROL: {
+      if (sizeof(RecvControlPacket) != total_len) return;
+      memcpy(&Rmsg_control, data, sizeof(RecvControlPacket));
 
-      g_navigation.lx           = Rmsg_nav_cmd.lx;
-      g_navigation.ly           = Rmsg_nav_cmd.ly;
-      g_navigation.az           = Rmsg_nav_cmd.az;
-      g_navigation.mode         = Rmsg_nav_cmd.mode;
-      g_navigation.reserved     = Rmsg_nav_cmd.reserved;
+      g_navigation.lx           = Rmsg_control.lx;
+      g_navigation.ly           = Rmsg_control.ly;
+      g_navigation.az           = Rmsg_control.az;
+      g_navigation.mode         = Rmsg_control.mode;
+      g_navigation.reserved     = Rmsg_control.reserved;
       g_navigation.valid        = true;
       g_navigation.last_recv_ms = now_ms();
-
-      break;
-    }
-case HDR_RX_HEARTBEAT: {
-      if (sizeof(RecvHeartbeatPacket) != total_len) return;
-      memcpy(&Rmsg_heartbeat, data, sizeof(RecvHeartbeatPacket));
-
-      g_heartbeat.ros_state    = Rmsg_heartbeat.ros_state;
-      g_heartbeat.reserved     = Rmsg_heartbeat.reserved;
-      g_heartbeat.valid        = true;
-      g_heartbeat.last_recv_ms = now_ms();
+      g_heartbeat.ros_state     = Rmsg_control.ros_state;
+      g_heartbeat.reserved2     = Rmsg_control.reserved2;
+      g_heartbeat.valid         = true;
+      g_heartbeat.last_recv_ms  = now_ms();
 
       break;
     }
@@ -326,14 +278,8 @@ void Navigation_Task(void)
   }
 
   /* Dispatch periodic sends. */
-if ((s_tick_counter % SEND_IMU_INTERVAL_MS) == 0) {
-    send_ImuPacket();
-  }
-if ((s_tick_counter % SEND_CHASSIS_FEEDBACK_INTERVAL_MS) == 0) {
-    send_ChassisFeedbackPacket();
-  }
-if ((s_tick_counter % SEND_REFEREE_INTERVAL_MS) == 0) {
-    send_RefereePacket();
+if ((s_tick_counter % SEND_TELEMETRY_INTERVAL_MS) == 0) {
+    send_TelemetryPacket();
   }
 
 }

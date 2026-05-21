@@ -46,11 +46,8 @@ def crc16(data: bytes) -> int:
 # ----------------------------------------------------------------------------
 # Header constants
 # ----------------------------------------------------------------------------
-HEADER_IMU = 0x51  # stm32_to_ros, 200Hz
-HEADER_CHASSIS_FEEDBACK = 0x52  # stm32_to_ros, 20Hz
-HEADER_REFEREE = 0x53  # stm32_to_ros, 1Hz
-HEADER_NAV_CMD = 0xA2  # ros_to_stm32, 20Hz
-HEADER_HEARTBEAT = 0xA3  # ros_to_stm32, 1Hz
+HEADER_TELEMETRY = 0x50  # stm32_to_ros, 200Hz
+HEADER_CONTROL = 0xA0  # ros_to_stm32, 20Hz
 
 
 # ----------------------------------------------------------------------------
@@ -58,8 +55,8 @@ HEADER_HEARTBEAT = 0xA3  # ros_to_stm32, 1Hz
 # ----------------------------------------------------------------------------
 
 @dataclass
-class ImuPacket:
-    """stm32_to_ros, 200Hz, frame=22B"""
+class TelemetryPacket:
+    """stm32_to_ros, 200Hz, frame=55B"""
     gimbal_pitch: float = 0.0  # 云台 pitch（绕 y） [rad]
 
     gimbal_yaw: float = 0.0  # 云台 yaw（绕 z） [rad]
@@ -68,29 +65,8 @@ class ImuPacket:
 
     chassis_yaw: float = 0.0  # 车体 yaw（绕 z） [rad]
 
-    mcu_timestamp_ms: int = 0  # MCU 时间戳低 16 位，便于估算时延 [ms]
+    mcu_timestamp_ms: int = 0  # MCU 时间戳低 16 位 [ms]
 
-
-
-ImuPacket.HEADER          = 0x51
-ImuPacket.PAYLOAD_SIZE    = 18
-ImuPacket.FRAME_SIZE      = 22
-ImuPacket.STRUCT_NO_CRC   = '<BBffffH'  # header + len + payload
-ImuPacket.STRUCT_FULL     = '<BBffffHH'    # full frame incl CRC
-ImuPacket.FREQUENCY_HZ    = 200
-ImuPacket.DIRECTION       = 'stm32_to_ros'
-ImuPacket.FIELDS_META     = [
-    {'name': 'gimbal_pitch', 'type': 'float', 'unit': 'rad', 'desc': '云台 pitch（绕 y）'},
-    {'name': 'gimbal_yaw', 'type': 'float', 'unit': 'rad', 'desc': '云台 yaw（绕 z）'},
-    {'name': 'chassis_pitch', 'type': 'float', 'unit': 'rad', 'desc': '车体 pitch（绕 y），轮足姿态'},
-    {'name': 'chassis_yaw', 'type': 'float', 'unit': 'rad', 'desc': '车体 yaw（绕 z）'},
-    {'name': 'mcu_timestamp_ms', 'type': 'uint16', 'unit': 'ms', 'desc': 'MCU 时间戳低 16 位，便于估算时延'},
-]
-
-
-@dataclass
-class ChassisFeedbackPacket:
-    """stm32_to_ros, 20Hz, frame=14B"""
     current_hp: int = 0  # 本机当前血量 [hp]
 
     projectile_allowance_17mm: int = 0  # 17mm 弹丸剩余发射次数 [count]
@@ -99,29 +75,8 @@ class ChassisFeedbackPacket:
 
     chassis_mode: int = 0  # 电控实际模式 0=normal 1=spin_low 2=spin_high 3=estop
 
-    reserved: int = 0  # 字节对齐占位，保留
+    reserved: int = 0  # 字节对齐占位
 
-
-
-ChassisFeedbackPacket.HEADER          = 0x52
-ChassisFeedbackPacket.PAYLOAD_SIZE    = 10
-ChassisFeedbackPacket.FRAME_SIZE      = 14
-ChassisFeedbackPacket.STRUCT_NO_CRC   = '<BBHHfBB'  # header + len + payload
-ChassisFeedbackPacket.STRUCT_FULL     = '<BBHHfBBH'    # full frame incl CRC
-ChassisFeedbackPacket.FREQUENCY_HZ    = 20
-ChassisFeedbackPacket.DIRECTION       = 'stm32_to_ros'
-ChassisFeedbackPacket.FIELDS_META     = [
-    {'name': 'current_hp', 'type': 'uint16', 'unit': 'hp', 'desc': '本机当前血量'},
-    {'name': 'projectile_allowance_17mm', 'type': 'uint16', 'unit': 'count', 'desc': '17mm 弹丸剩余发射次数'},
-    {'name': 'chassis_power', 'type': 'float', 'unit': 'W', 'desc': '底盘实时功率'},
-    {'name': 'chassis_mode', 'type': 'uint8', 'desc': '电控实际模式 0=normal 1=spin_low 2=spin_high 3=estop'},
-    {'name': 'reserved', 'type': 'uint8', 'desc': '字节对齐占位，保留'},
-]
-
-
-@dataclass
-class RefereePacket:
-    """stm32_to_ros, 1Hz, frame=27B"""
     game_progress: int = 0  # 0=未开始 1=准备 2=自检 3=5s倒计时 4=比赛中 5=结算
 
     stage_remain_time: int = 0  # 当前阶段剩余时间 [s]
@@ -144,18 +99,28 @@ class RefereePacket:
 
     ally_base_hp: int = 0  # 己方基地血量 [hp]
 
-    event_data: int = 0  # 事件数据 bitfield，1=己方增益点 2=己方堡垒被占
+    event_data: int = 0  # 事件数据 bitfield
 
 
 
-RefereePacket.HEADER          = 0x53
-RefereePacket.PAYLOAD_SIZE    = 23
-RefereePacket.FRAME_SIZE      = 27
-RefereePacket.STRUCT_NO_CRC   = '<BBBHBBHHHHHHHI'  # header + len + payload
-RefereePacket.STRUCT_FULL     = '<BBBHBBHHHHHHHIH'    # full frame incl CRC
-RefereePacket.FREQUENCY_HZ    = 1
-RefereePacket.DIRECTION       = 'stm32_to_ros'
-RefereePacket.FIELDS_META     = [
+TelemetryPacket.HEADER          = 0x50
+TelemetryPacket.PAYLOAD_SIZE    = 51
+TelemetryPacket.FRAME_SIZE      = 55
+TelemetryPacket.STRUCT_NO_CRC   = '<BBffffHHHfBBBHBBHHHHHHHI'  # header + len + payload
+TelemetryPacket.STRUCT_FULL     = '<BBffffHHHfBBBHBBHHHHHHHIH'    # full frame incl CRC
+TelemetryPacket.FREQUENCY_HZ    = 200
+TelemetryPacket.DIRECTION       = 'stm32_to_ros'
+TelemetryPacket.FIELDS_META     = [
+    {'name': 'gimbal_pitch', 'type': 'float', 'unit': 'rad', 'desc': '云台 pitch（绕 y）'},
+    {'name': 'gimbal_yaw', 'type': 'float', 'unit': 'rad', 'desc': '云台 yaw（绕 z）'},
+    {'name': 'chassis_pitch', 'type': 'float', 'unit': 'rad', 'desc': '车体 pitch（绕 y），轮足姿态'},
+    {'name': 'chassis_yaw', 'type': 'float', 'unit': 'rad', 'desc': '车体 yaw（绕 z）'},
+    {'name': 'mcu_timestamp_ms', 'type': 'uint16', 'unit': 'ms', 'desc': 'MCU 时间戳低 16 位'},
+    {'name': 'current_hp', 'type': 'uint16', 'unit': 'hp', 'desc': '本机当前血量'},
+    {'name': 'projectile_allowance_17mm', 'type': 'uint16', 'unit': 'count', 'desc': '17mm 弹丸剩余发射次数'},
+    {'name': 'chassis_power', 'type': 'float', 'unit': 'W', 'desc': '底盘实时功率'},
+    {'name': 'chassis_mode', 'type': 'uint8', 'desc': '电控实际模式 0=normal 1=spin_low 2=spin_high 3=estop'},
+    {'name': 'reserved', 'type': 'uint8', 'desc': '字节对齐占位'},
     {'name': 'game_progress', 'type': 'uint8', 'desc': '0=未开始 1=准备 2=自检 3=5s倒计时 4=比赛中 5=结算'},
     {'name': 'stage_remain_time', 'type': 'uint16', 'unit': 's', 'desc': '当前阶段剩余时间'},
     {'name': 'team_colour', 'type': 'uint8', 'desc': '1=红方 0=蓝方'},
@@ -167,60 +132,44 @@ RefereePacket.FIELDS_META     = [
     {'name': 'ally_7_robot_hp', 'type': 'uint16', 'unit': 'hp', 'desc': '己方 7 号哨兵血量'},
     {'name': 'ally_outpost_hp', 'type': 'uint16', 'unit': 'hp', 'desc': '己方前哨站血量'},
     {'name': 'ally_base_hp', 'type': 'uint16', 'unit': 'hp', 'desc': '己方基地血量'},
-    {'name': 'event_data', 'type': 'uint32', 'desc': '事件数据 bitfield，1=己方增益点 2=己方堡垒被占'},
+    {'name': 'event_data', 'type': 'uint32', 'desc': '事件数据 bitfield'},
 ]
 
 
 @dataclass
-class NavCmdPacket:
-    """ros_to_stm32, 20Hz, frame=18B"""
+class ControlPacket:
+    """ros_to_stm32, 20Hz, frame=20B"""
     lx: float = 0.0  # 底盘 body 系前向线速度 [m/s]
 
-    ly: float = 0.0  # 底盘 body 系侧向线速度（差速底盘锁 0） [m/s]
+    ly: float = 0.0  # 底盘 body 系侧向线速度 [m/s]
 
     az: float = 0.0  # 底盘角速度 / 自旋速度 [rad/s]
 
     mode: int = 0  # 0=normal 1=spin_low 2=spin_high 3=estop
 
-    reserved: int = 0  # 字节对齐占位，保留
+    reserved: int = 0  # 字节对齐占位
 
-
-
-NavCmdPacket.HEADER          = 0xA2
-NavCmdPacket.PAYLOAD_SIZE    = 14
-NavCmdPacket.FRAME_SIZE      = 18
-NavCmdPacket.STRUCT_NO_CRC   = '<BBfffBB'  # header + len + payload
-NavCmdPacket.STRUCT_FULL     = '<BBfffBBH'    # full frame incl CRC
-NavCmdPacket.FREQUENCY_HZ    = 20
-NavCmdPacket.DIRECTION       = 'ros_to_stm32'
-NavCmdPacket.FIELDS_META     = [
-    {'name': 'lx', 'type': 'float', 'unit': 'm/s', 'desc': '底盘 body 系前向线速度'},
-    {'name': 'ly', 'type': 'float', 'unit': 'm/s', 'desc': '底盘 body 系侧向线速度（差速底盘锁 0）'},
-    {'name': 'az', 'type': 'float', 'unit': 'rad/s', 'desc': '底盘角速度 / 自旋速度'},
-    {'name': 'mode', 'type': 'uint8', 'desc': '0=normal 1=spin_low 2=spin_high 3=estop'},
-    {'name': 'reserved', 'type': 'uint8', 'desc': '字节对齐占位，保留'},
-]
-
-
-@dataclass
-class HeartbeatPacket:
-    """ros_to_stm32, 1Hz, frame=6B"""
     ros_state: int = 0  # 0=init 1=ready 2=running 3=fault
 
-    reserved: int = 0  # 字节对齐占位，保留
+    reserved2: int = 0  # 字节对齐占位
 
 
 
-HeartbeatPacket.HEADER          = 0xA3
-HeartbeatPacket.PAYLOAD_SIZE    = 2
-HeartbeatPacket.FRAME_SIZE      = 6
-HeartbeatPacket.STRUCT_NO_CRC   = '<BBBB'  # header + len + payload
-HeartbeatPacket.STRUCT_FULL     = '<BBBBH'    # full frame incl CRC
-HeartbeatPacket.FREQUENCY_HZ    = 1
-HeartbeatPacket.DIRECTION       = 'ros_to_stm32'
-HeartbeatPacket.FIELDS_META     = [
+ControlPacket.HEADER          = 0xA0
+ControlPacket.PAYLOAD_SIZE    = 16
+ControlPacket.FRAME_SIZE      = 20
+ControlPacket.STRUCT_NO_CRC   = '<BBfffBBBB'  # header + len + payload
+ControlPacket.STRUCT_FULL     = '<BBfffBBBBH'    # full frame incl CRC
+ControlPacket.FREQUENCY_HZ    = 20
+ControlPacket.DIRECTION       = 'ros_to_stm32'
+ControlPacket.FIELDS_META     = [
+    {'name': 'lx', 'type': 'float', 'unit': 'm/s', 'desc': '底盘 body 系前向线速度'},
+    {'name': 'ly', 'type': 'float', 'unit': 'm/s', 'desc': '底盘 body 系侧向线速度'},
+    {'name': 'az', 'type': 'float', 'unit': 'rad/s', 'desc': '底盘角速度 / 自旋速度'},
+    {'name': 'mode', 'type': 'uint8', 'desc': '0=normal 1=spin_low 2=spin_high 3=estop'},
+    {'name': 'reserved', 'type': 'uint8', 'desc': '字节对齐占位'},
     {'name': 'ros_state', 'type': 'uint8', 'desc': '0=init 1=ready 2=running 3=fault'},
-    {'name': 'reserved', 'type': 'uint8', 'desc': '字节对齐占位，保留'},
+    {'name': 'reserved2', 'type': 'uint8', 'desc': '字节对齐占位'},
 ]
 
 
@@ -229,22 +178,16 @@ HeartbeatPacket.FIELDS_META     = [
 # Header → class lookup
 # ----------------------------------------------------------------------------
 PACKETS = {
-    0x51: ImuPacket,
-    0x52: ChassisFeedbackPacket,
-    0x53: RefereePacket,
-    0xA2: NavCmdPacket,
-    0xA3: HeartbeatPacket,
+    0x50: TelemetryPacket,
+    0xA0: ControlPacket,
 }
 
 STM32_TO_ROS_PACKETS = [
-    ImuPacket,
-    ChassisFeedbackPacket,
-    RefereePacket,
+    TelemetryPacket,
 ]
 
 ROS_TO_STM32_PACKETS = [
-    NavCmdPacket,
-    HeartbeatPacket,
+    ControlPacket,
 ]
 
 

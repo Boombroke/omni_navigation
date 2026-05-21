@@ -1,7 +1,7 @@
 /* AUTO-GENERATED from protocol.yaml — DO NOT EDIT
  * Run `python3 generate.py` after modifying protocol.yaml.
  *
- * Frame format (v3.0):
+ * Frame format (v3.1):
  *   [HEADER 1B] [LEN 1B] [PAYLOAD N B] [CRC16 2B]
  *   - LEN     = N (payload bytes only)
  *   - CRC16   = covers [HEADER..PAYLOAD] (N+2 bytes), little-endian appended
@@ -37,20 +37,15 @@
 /* ----------------------------------------------------------------------------
  * Header constants  (MCU view: TX = MCU→ROS, RX = ROS→MCU)
  * ------------------------------------------------------------------------- */
-#define HDR_TX_IMU             0x51  /* MCU→ROS, 200Hz, frame=22B */
-#define HDR_TX_CHASSIS_FEEDBACK 0x52  /* MCU→ROS, 20Hz, frame=14B */
-#define HDR_TX_REFEREE         0x53  /* MCU→ROS, 1Hz, frame=27B */
+#define HDR_TX_TELEMETRY       0x50  /* MCU→ROS, 200Hz, frame=55B */
 
-#define HDR_RX_NAV_CMD         0xA2  /* ROS→MCU, 20Hz, frame=18B */
-#define HDR_RX_HEARTBEAT       0xA3  /* ROS→MCU, 1Hz, frame=6B */
+#define HDR_RX_CONTROL         0xA0  /* ROS→MCU, 20Hz, frame=20B */
 
 
 /* ----------------------------------------------------------------------------
  * Send intervals (in 1kHz task ticks)
  * ------------------------------------------------------------------------- */
-#define SEND_IMU_INTERVAL_MS           5  /* 200Hz */
-#define SEND_CHASSIS_FEEDBACK_INTERVAL_MS 50  /* 20Hz */
-#define SEND_REFEREE_INTERVAL_MS       1000  /* 1Hz */
+#define SEND_TELEMETRY_INTERVAL_MS     5  /* 200Hz */
 
 
 /* ----------------------------------------------------------------------------
@@ -74,7 +69,7 @@ typedef enum {
  * TX packet structs (MCU → ROS)
  * ------------------------------------------------------------------------- */
 
-/* 0x51 SendImuPacket — 22B total (18B payload), 200Hz */
+/* 0x50 SendTelemetryPacket — 55B total (51B payload), 200Hz */
 typedef struct
 {
   uint8_t  header;
@@ -84,32 +79,12 @@ typedef struct
   float    gimbal_yaw;  /* 云台 yaw（绕 z） [rad] */
   float    chassis_pitch;  /* 车体 pitch（绕 y），轮足姿态 [rad] */
   float    chassis_yaw;  /* 车体 yaw（绕 z） [rad] */
-  uint16_t mcu_timestamp_ms;  /* MCU 时间戳低 16 位，便于估算时延 [ms] */
-  uint16_t checksum;
-} __attribute__((packed)) SendImuPacket;
-
-
-/* 0x52 SendChassisFeedbackPacket — 14B total (10B payload), 20Hz */
-typedef struct
-{
-  uint8_t  header;
-  uint8_t  len;
-
+  uint16_t mcu_timestamp_ms;  /* MCU 时间戳低 16 位 [ms] */
   uint16_t current_hp;  /* 本机当前血量 [hp] */
   uint16_t projectile_allowance_17mm;  /* 17mm 弹丸剩余发射次数 [count] */
   float    chassis_power;  /* 底盘实时功率 [W] */
   uint8_t  chassis_mode;  /* 电控实际模式 0=normal 1=spin_low 2=spin_high 3=estop */
-  uint8_t  reserved;  /* 字节对齐占位，保留 */
-  uint16_t checksum;
-} __attribute__((packed)) SendChassisFeedbackPacket;
-
-
-/* 0x53 SendRefereePacket — 27B total (23B payload), 1Hz */
-typedef struct
-{
-  uint8_t  header;
-  uint8_t  len;
-
+  uint8_t  reserved;  /* 字节对齐占位 */
   uint8_t  game_progress;  /* 0=未开始 1=准备 2=自检 3=5s倒计时 4=比赛中 5=结算 */
   uint16_t stage_remain_time;  /* 当前阶段剩余时间 [s] */
   uint8_t  team_colour;  /* 1=红方 0=蓝方 */
@@ -121,40 +96,30 @@ typedef struct
   uint16_t ally_7_robot_hp;  /* 己方 7 号哨兵血量 [hp] */
   uint16_t ally_outpost_hp;  /* 己方前哨站血量 [hp] */
   uint16_t ally_base_hp;  /* 己方基地血量 [hp] */
-  uint32_t event_data;  /* 事件数据 bitfield，1=己方增益点 2=己方堡垒被占 */
+  uint32_t event_data;  /* 事件数据 bitfield */
   uint16_t checksum;
-} __attribute__((packed)) SendRefereePacket;
+} __attribute__((packed)) SendTelemetryPacket;
 
 
 /* ----------------------------------------------------------------------------
  * RX packet structs (ROS → MCU)
  * ------------------------------------------------------------------------- */
 
-/* 0xA2 RecvNavCmdPacket — 18B total (14B payload), 20Hz */
+/* 0xA0 RecvControlPacket — 20B total (16B payload), 20Hz */
 typedef struct
 {
   uint8_t  header;
   uint8_t  len;
 
   float    lx;  /* 底盘 body 系前向线速度 [m/s] */
-  float    ly;  /* 底盘 body 系侧向线速度（差速底盘锁 0） [m/s] */
+  float    ly;  /* 底盘 body 系侧向线速度 [m/s] */
   float    az;  /* 底盘角速度 / 自旋速度 [rad/s] */
   uint8_t  mode;  /* 0=normal 1=spin_low 2=spin_high 3=estop */
-  uint8_t  reserved;  /* 字节对齐占位，保留 */
-  uint16_t checksum;
-} __attribute__((packed)) RecvNavCmdPacket;
-
-
-/* 0xA3 RecvHeartbeatPacket — 6B total (2B payload), 1Hz */
-typedef struct
-{
-  uint8_t  header;
-  uint8_t  len;
-
+  uint8_t  reserved;  /* 字节对齐占位 */
   uint8_t  ros_state;  /* 0=init 1=ready 2=running 3=fault */
-  uint8_t  reserved;  /* 字节对齐占位，保留 */
+  uint8_t  reserved2;  /* 字节对齐占位 */
   uint16_t checksum;
-} __attribute__((packed)) RecvHeartbeatPacket;
+} __attribute__((packed)) RecvControlPacket;
 
 
 /* ----------------------------------------------------------------------------
@@ -163,18 +128,18 @@ typedef struct
 typedef struct
 {
   float    lx;  /* 底盘 body 系前向线速度 [m/s] */
-  float    ly;  /* 底盘 body 系侧向线速度（差速底盘锁 0） [m/s] */
+  float    ly;  /* 底盘 body 系侧向线速度 [m/s] */
   float    az;  /* 底盘角速度 / 自旋速度 [rad/s] */
   uint8_t  mode;  /* 0=normal 1=spin_low 2=spin_high 3=estop */
-  uint8_t  reserved;  /* 字节对齐占位，保留 */
-  bool     valid;         /* true once a NavCmd was received and CRC ok */
-  uint32_t last_recv_ms;  /* MCU tick of last successful NavCmd */
+  uint8_t  reserved;  /* 字节对齐占位 */
+  bool     valid;         /* true once a Control frame was received and CRC ok */
+  uint32_t last_recv_ms;  /* MCU tick of last successful Control */
 } Navigation;
 
 typedef struct
 {
   uint8_t  ros_state;  /* 0=init 1=ready 2=running 3=fault */
-  uint8_t  reserved;  /* 字节对齐占位，保留 */
+  uint8_t  reserved2;  /* 字节对齐占位 */
   bool     valid;
   uint32_t last_recv_ms;
 } HeartbeatState;
@@ -188,9 +153,7 @@ void Navigation_OnUsbReceive(const uint8_t *data, uint32_t len);  /* call from U
 bool Navigation_IsLinkAlive(void);          /* true if last Heartbeat within HEARTBEAT_TIMEOUT_MS */
 
 /* Send hooks — MCU emits these. User code can also call manually. */
-void send_ImuPacket(void);
-void send_ChassisFeedbackPacket(void);
-void send_RefereePacket(void);
+void send_TelemetryPacket(void);
 
 
 /* CRC helper — MCU project should provide CRC16 (polynomial 0x1189 / table-based). */
@@ -200,12 +163,9 @@ bool Verify_CRC16_Check_Sum_Buf(const uint8_t *buf, uint32_t len);
 /* ----------------------------------------------------------------------------
  * Globals — exposed for legacy access patterns
  * ------------------------------------------------------------------------- */
-extern SendImuPacket          Smsg_imu;
-extern SendChassisFeedbackPacket Smsg_chassis_feedback;
-extern SendRefereePacket      Smsg_referee;
+extern SendTelemetryPacket    Smsg_telemetry;
 
-extern RecvNavCmdPacket       Rmsg_nav_cmd;
-extern RecvHeartbeatPacket    Rmsg_heartbeat;
+extern RecvControlPacket      Rmsg_control;
 
 extern Navigation       g_navigation;
 extern HeartbeatState   g_heartbeat;

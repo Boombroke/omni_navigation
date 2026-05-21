@@ -29,8 +29,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from protocol import (
     crc16, pack_with_crc, unpack_packet, packet_size_for_header,
-    ImuPacket, ChassisFeedbackPacket, RefereePacket, NavCmdPacket, HeartbeatPacket,
-    HEADER_IMU, HEADER_CHASSIS_FEEDBACK, HEADER_REFEREE, HEADER_NAV_CMD, HEADER_HEARTBEAT,
+    TelemetryPacket, ControlPacket,
     STM32_TO_ROS_PACKETS, ROS_TO_STM32_PACKETS, PACKETS,
 )
 
@@ -129,7 +128,7 @@ REMEDIES = {
 
 
 class SerialReaderThread(QtCore.QThread):
-    nav_packet_received = QtCore.pyqtSignal(float, float, float, int, bool)
+    nav_packet_received = QtCore.pyqtSignal(float, float, float, bool)
     serial_error = QtCore.pyqtSignal(str)
 
     def __init__(self, serial_obj: serial.Serial, serial_lock: threading.Lock):
@@ -174,8 +173,8 @@ class SerialReaderThread(QtCore.QThread):
             if result is None:
                 continue
             pkt, crc_ok = result
-            if isinstance(pkt, NavCmdPacket) and NavCmdPacket in ROS_TO_STM32_PACKETS and NavCmdPacket.HEADER in PACKETS:
-                self.nav_packet_received.emit(pkt.lx, pkt.ly, pkt.az, int(pkt.mode), crc_ok)
+            if isinstance(pkt, ControlPacket) and ControlPacket in ROS_TO_STM32_PACKETS:
+                self.nav_packet_received.emit(pkt.lx, pkt.ly, pkt.az, crc_ok)
 
 
 class DiagReaderThread(QtCore.QThread):
@@ -303,11 +302,8 @@ class DiagReaderThread(QtCore.QThread):
                     if gap > self._max_no_packet_gap:
                         self._max_no_packet_gap = gap
                 self._last_valid_packet_time = now
-                if hdr == HEADER_IMU and len(body) == ImuPacket.FRAME_SIZE - 2:
-                    # body = [header, len, gimbal_pitch, gimbal_yaw, chassis_pitch, chassis_yaw, mcu_ts]
-                    fields = struct.unpack(ImuPacket.STRUCT_NO_CRC, body)
-                    gimbal_pitch = fields[2]
-                    gimbal_yaw = fields[3]
+                if hdr == TelemetryPacket.HEADER and len(body) >= 10:
+                    _, _, gimbal_pitch, gimbal_yaw = struct.unpack('<BBff', body[:10])
                     if self._last_imu_pitch is not None and self._last_imu_yaw is not None:
                         if (
                             abs(gimbal_pitch - self._last_imu_pitch) > self.CONTENT_JUMP_THRESHOLD
@@ -507,7 +503,11 @@ class SerialMockTab(QtWidgets.QWidget):
         main_layout.addLayout(top_bar)
 
         self.tabs = QtWidgets.QTabWidget()
-        send_packet_classes = list(STM32_TO_ROS_PACKETS)
+        send_packet_classes = [
+            pkt_class
+            for pkt_class in (TelemetryPacket,)
+            if pkt_class in STM32_TO_ROS_PACKETS and pkt_class.HEADER in PACKETS
+        ]
         for pkt_class in send_packet_classes:
             tab_name = f'{pkt_class.__name__.replace("Packet", "")} 0x{pkt_class.HEADER:02X}'
             tab_widget, enable_cb, controls, interval_spin = self._build_packet_tab(pkt_class)
@@ -779,12 +779,11 @@ class SerialMockTab(QtWidgets.QWidget):
             tab_info['count'] += 1
             self.update_status_bar()
 
-    @QtCore.pyqtSlot(float, float, float, int, bool)
-    def on_nav_packet_received(self, lx: float, ly: float, az: float, mode: int, crc_ok: bool) -> None:
-        self.nav_vel_x_label.setText(f'{lx:.3f} m/s')
-        self.nav_vel_y_label.setText(f'{ly:.3f} m/s')
-        self.nav_vel_w_label.setText(f'{az:.3f} rad/s')
-        self.nav_mode_label.setText(f'{mode}')
+    @QtCore.pyqtSlot(float, float, float, bool)
+    def on_nav_packet_received(self, vel_x: float, vel_y: float, vel_w: float, crc_ok: bool) -> None:
+        self.nav_vel_x_label.setText(f'{vel_x:.3f} m/s')
+        self.nav_vel_y_label.setText(f'{vel_y:.3f} m/s')
+        self.nav_vel_w_label.setText(f'{vel_w:.3f} rad/s')
         if crc_ok:
             self.nav_crc_label.setText('OK')
             self.nav_crc_label.setStyleSheet('color: #34d399; font-weight: 600;')

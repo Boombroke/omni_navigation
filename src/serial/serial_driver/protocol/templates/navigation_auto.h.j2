@@ -1,7 +1,7 @@
 /* AUTO-GENERATED from protocol.yaml — DO NOT EDIT
  * Run `python3 generate.py` after modifying protocol.yaml.
  *
- * Frame format (v3.0):
+ * Frame format (v3.1):
  *   [HEADER 1B] [LEN 1B] [PAYLOAD N B] [CRC16 2B]
  *   - LEN     = N (payload bytes only)
  *   - CRC16   = covers [HEADER..PAYLOAD] (N+2 bytes), little-endian appended
@@ -105,16 +105,16 @@ typedef struct
  * ------------------------------------------------------------------------- */
 typedef struct
 {
-{%- for f in ros_to_stm32[0].fields %}
+{%- for f in ros_to_stm32[0].fields if f.name in ['lx', 'ly', 'az', 'mode', 'reserved'] %}
   {{ "%-8s"|format(f.c_type) }} {{ f.name }};  /* {{ f.desc }}{% if f.unit %} [{{ f.unit }}]{% endif %} */
 {%- endfor %}
-  bool     valid;         /* true once a NavCmd was received and CRC ok */
-  uint32_t last_recv_ms;  /* MCU tick of last successful NavCmd */
+  bool     valid;         /* true once a Control frame was received and CRC ok */
+  uint32_t last_recv_ms;  /* MCU tick of last successful Control */
 } Navigation;
 
 typedef struct
 {
-{%- for f in ros_to_stm32[1].fields %}
+{%- for f in ros_to_stm32[0].fields if f.name in ['ros_state', 'reserved2'] %}
   {{ "%-8s"|format(f.c_type) }} {{ f.name }};  /* {{ f.desc }}{% if f.unit %} [{{ f.unit }}]{% endif %} */
 {%- endfor %}
   bool     valid;

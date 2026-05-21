@@ -1,6 +1,6 @@
 // Copyright 2024 Boombroke. Apache-2.0.
 //
-// v3.0 generic dispatcher implementation.
+// v3.1 single-packet implementation.
 // See rm_serial_driver.hpp for protocol overview.
 
 #include <chrono>
@@ -23,15 +23,20 @@
 namespace rm_serial_driver
 {
 
+namespace
+{
+constexpr size_t kRxChunkSize = 256;
+constexpr size_t kRxRingMaxSize = 2048;
+}  // namespace
+
 RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
 : Node("rm_serial_driver", options),
   owned_ctx_{new IoContext(2)},
   serial_driver_{new drivers::serial_driver::SerialDriver(*owned_ctx_)}
 {
-  RCLCPP_INFO(get_logger(), "Start RMSerialDriver (protocol v3.0)");
+  RCLCPP_INFO(get_logger(), "Start RMSerialDriver (protocol v3.1)");
   getParams();
 
-  // Optional: write every TX NavCmd to /tmp/vel_log_*.csv for offline analysis.
   this->declare_parameter<bool>("enable_vel_log", false);
   this->get_parameter("enable_vel_log", enable_vel_log_);
   if (enable_vel_log_) {
@@ -42,37 +47,22 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
     RCLCPP_INFO(get_logger(), "Velocity logging enabled: %s", log_path.c_str());
   }
 
-  // ----- subscribers -----
-  // /cmd_vel_chassis: final chassis Twist after motion_manager arbitration.
-  // The driver forwards lx/ly/az into TxNavCmdPacket on every callback.
   nav_cmd_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
     "/cmd_vel_chassis", 10,
     std::bind(&RMSerialDriver::sendNavCmd, this, std::placeholders::_1));
 
-  // motion_manager/state: optional input. UInt8 mapping: 0=normal, 1=spin_low,
-  // 2=spin_high, 3=estop. If no publisher exists yet, current_mode_ stays at
-  // 0 (normal), which is the safest fallback.
   motion_state_sub_ = this->create_subscription<std_msgs::msg::UInt8>(
     "motion_manager/state", 10,
     [this](const std_msgs::msg::UInt8::SharedPtr msg) { current_mode_ = msg->data; });
 
-  // ----- publishers (split per v3.0 packet semantics) -----
-  // RxImuPacket → 2 publishers: gimbal joints (existing topic) +
-  //   chassis attitude (new, exposes chassis_pitch/yaw for wheeled-biped TF).
   gimbal_joint_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(
     "serial/gimbal_joint_state", 10);
   chassis_attitude_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(
     "serial/chassis_attitude", 10);
-
-  // RxChassisFeedbackPacket → existing referee/robot_status (HP + ammo) +
-  //   new serial/chassis_status (Float32MultiArray = [chassis_power, chassis_mode])
-  //   to expose extra fields without modifying rm_interfaces messages.
   robot_status_pub_ = this->create_publisher<rm_interfaces::msg::RobotStatus>(
     "referee/robot_status", 10);
   chassis_status_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
     "serial/chassis_status", 10);
-
-  // RxRefereePacket → 3 publishers (preserve existing referee/* topic names).
   game_status_pub_ = this->create_publisher<rm_interfaces::msg::GameStatus>(
     "referee/game_status", 10);
   all_hp_pub_ = this->create_publisher<rm_interfaces::msg::GameRobotHP>(
@@ -80,12 +70,9 @@ RMSerialDriver::RMSerialDriver(const rclcpp::NodeOptions & options)
   rfid_pub_ = this->create_publisher<rm_interfaces::msg::RfidStatus>(
     "referee/rfidStatus", 10);
 
-  // ----- 1Hz heartbeat timer (TxHeartbeatPacket) -----
-  // MCU runs a 1500ms watchdog: if no heartbeat received it forces estop.
   heartbeat_timer_ = this->create_wall_timer(
     std::chrono::seconds(1), std::bind(&RMSerialDriver::sendHeartbeat, this));
 
-  // ----- open port + spawn receive thread -----
   try {
     serial_driver_->init_port(device_name_, *device_config_);
     if (!serial_driver_->port()->is_open()) {
@@ -115,95 +102,24 @@ RMSerialDriver::~RMSerialDriver()
   }
 }
 
-// ---------------------------------------------------------------------------
-// Generic frame dispatcher.
-//
-// Algorithm:
-//   1. Read 1 byte (HEADER).
-//   2. If HEADER is in 0xA0..0xAF (TX echo), drain the rest of the frame
-//      using the LEN byte and discard.
-//   3. If HEADER is not a known RX header, log throttled WARN and drop the
-//      single byte; the next byte may resync.
-//   4. Read LEN. Sanity-check against payloadSizeForHeader().
-//   5. Read PAYLOAD + CRC16.
-//   6. Verify CRC over [HEADER..PAYLOAD]; throttled WARN on failure.
-//   7. Dispatch to per-packet handler.
-// ---------------------------------------------------------------------------
 void RMSerialDriver::receiveLoop()
 {
-  std::vector<uint8_t> hbuf(1);
-  std::vector<uint8_t> lbuf(1);
+  std::vector<uint8_t> chunk(kRxChunkSize);
 
   while (rclcpp::ok()) {
     try {
-      // 1. read HEADER
-      serial_driver_->port()->receive(hbuf);
-      uint8_t hdr = hbuf[0];
-
-      // 2. drop TX echo: half-duplex / loopback may bounce our own NavCmd back.
-      if (isTxHeader(hdr)) {
-        serial_driver_->port()->receive(lbuf);
-        uint8_t plen = lbuf[0];
-        std::vector<uint8_t> drain(plen + 2);
-        serial_driver_->port()->receive(drain);
-        RCLCPP_DEBUG(
-          get_logger(), "Skipped TX echo 0x%02X (%uB payload)", hdr,
-          static_cast<unsigned>(plen));
+      const size_t n = serial_driver_->port()->receive(chunk);
+      if (n == 0) {
         continue;
       }
-
-      // 3. unknown header — single byte drop, retry on next loop.
-      if (!isRxHeader(hdr)) {
-        RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 1000, "Unknown header 0x%02X, dropping byte", hdr);
-        continue;
-      }
-
-      // 4. read LEN, verify
-      serial_driver_->port()->receive(lbuf);
-      uint8_t plen = lbuf[0];
-      const size_t expected_payload = payloadSizeForHeader(hdr);
-      if (plen != expected_payload) {
+      if (rx_ring_.size() + n > kRxRingMaxSize) {
         RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 1000,
-          "LEN mismatch on 0x%02X: got %u want %zu", hdr, static_cast<unsigned>(plen),
-          expected_payload);
-        continue;
+          "RX ring overflow (%zu bytes), resetting", rx_ring_.size());
+        rx_ring_.clear();
       }
-
-      // 5. read PAYLOAD + CRC16
-      std::vector<uint8_t> body(plen + 2);
-      serial_driver_->port()->receive(body);
-
-      // 6. CRC over the full frame [HEADER][LEN][PAYLOAD][CRC16]
-      std::vector<uint8_t> full;
-      full.reserve(plen + 4);
-      full.push_back(hdr);
-      full.push_back(plen);
-      full.insert(full.end(), body.begin(), body.end());
-
-      if (!crc16::Verify_CRC16_Check_Sum(full.data(), full.size())) {
-        RCLCPP_WARN_THROTTLE(
-          get_logger(), *get_clock(), 1000,
-          "CRC failed on header 0x%02X (%zuB)", hdr, full.size());
-        continue;
-      }
-
-      // 7. dispatch
-      switch (hdr) {
-        case HDR_RX_IMU:
-          handleImu(fromVector<RxImuPacket>(full));
-          break;
-        case HDR_RX_CHASSIS_FEEDBACK:
-          handleChassisFeedback(fromVector<RxChassisFeedbackPacket>(full));
-          break;
-        case HDR_RX_REFEREE:
-          handleReferee(fromVector<RxRefereePacket>(full));
-          break;
-        default:
-          // already filtered by isRxHeader; unreachable.
-          break;
-      }
+      rx_ring_.insert(rx_ring_.end(), chunk.begin(), chunk.begin() + n);
+      parseRxRing();
     } catch (const std::exception & ex) {
       RCLCPP_ERROR_THROTTLE(
         get_logger(), *get_clock(), 1000, "Receive error: %s", ex.what());
@@ -212,10 +128,61 @@ void RMSerialDriver::receiveLoop()
   }
 }
 
-// ---------------------------------------------------------------------------
-// RX handlers — convert packed wire structs to ROS messages.
-// ---------------------------------------------------------------------------
-void RMSerialDriver::handleImu(const RxImuPacket & pkt)
+void RMSerialDriver::parseRxRing()
+{
+  while (rx_ring_.size() >= 3) {
+    const uint8_t hdr = rx_ring_[0];
+
+    if (isTxHeader(hdr)) {
+      const size_t frame_len = frameSizeForHeader(hdr);
+      if (frame_len == 0 || rx_ring_.size() < frame_len) {
+        break;
+      }
+      rx_ring_.erase(rx_ring_.begin(), rx_ring_.begin() + static_cast<std::ptrdiff_t>(frame_len));
+      RCLCPP_DEBUG(
+        get_logger(), "Skipped TX echo 0x%02X (%zuB)", hdr, frame_len);
+      continue;
+    }
+
+    if (!isRxHeader(hdr)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000, "Unknown header 0x%02X, dropping byte", hdr);
+      rx_ring_.erase(rx_ring_.begin());
+      continue;
+    }
+
+    const size_t frame_len = frameSizeForHeader(hdr);
+    if (frame_len == 0 || rx_ring_.size() < frame_len) {
+      break;
+    }
+
+    const uint8_t plen = rx_ring_[1];
+    if (plen != payloadSizeForHeader(hdr)) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "LEN mismatch on 0x%02X: got %u want %zu", hdr, static_cast<unsigned>(plen),
+        payloadSizeForHeader(hdr));
+      rx_ring_.erase(rx_ring_.begin());
+      continue;
+    }
+
+    std::vector<uint8_t> full(rx_ring_.begin(), rx_ring_.begin() + static_cast<std::ptrdiff_t>(frame_len));
+    rx_ring_.erase(rx_ring_.begin(), rx_ring_.begin() + static_cast<std::ptrdiff_t>(frame_len));
+
+    if (!crc16::Verify_CRC16_Check_Sum(full.data(), full.size())) {
+      RCLCPP_WARN_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "CRC failed on header 0x%02X (%zuB)", hdr, full.size());
+      continue;
+    }
+
+    if (hdr == HDR_RX_TELEMETRY) {
+      handleTelemetry(fromVector<RxTelemetryPacket>(full));
+    }
+  }
+}
+
+void RMSerialDriver::handleTelemetry(const RxTelemetryPacket & pkt)
 {
   const auto stamp = now();
 
@@ -230,24 +197,16 @@ void RMSerialDriver::handleImu(const RxImuPacket & pkt)
   chassis.name = {"chassis_pitch", "chassis_yaw"};
   chassis.position = {pkt.chassis_pitch, pkt.chassis_yaw};
   chassis_attitude_pub_->publish(chassis);
-}
 
-void RMSerialDriver::handleChassisFeedback(const RxChassisFeedbackPacket & pkt)
-{
   rm_interfaces::msg::RobotStatus status;
   status.current_hp = pkt.current_hp;
   status.projectile_allowance_17mm = pkt.projectile_allowance_17mm;
   robot_status_pub_->publish(status);
 
-  // Expose extra fields (chassis_power, chassis_mode) without expanding
-  // the upstream rm_interfaces/RobotStatus message.
   std_msgs::msg::Float32MultiArray chassis_extra;
   chassis_extra.data = {pkt.chassis_power, static_cast<float>(pkt.chassis_mode)};
   chassis_status_pub_->publish(chassis_extra);
-}
 
-void RMSerialDriver::handleReferee(const RxRefereePacket & pkt)
-{
   rm_interfaces::msg::GameStatus game;
   game.game_progress = pkt.game_progress;
   game.stage_remain_time = pkt.stage_remain_time;
@@ -269,21 +228,34 @@ void RMSerialDriver::handleReferee(const RxRefereePacket & pkt)
   rfid_pub_->publish(rfid);
 }
 
-// ---------------------------------------------------------------------------
-// TX — NavCmd (event-driven, on each /cmd_vel_chassis callback).
-// ---------------------------------------------------------------------------
 void RMSerialDriver::sendNavCmd(const geometry_msgs::msg::Twist::SharedPtr msg)
 {
-  try {
-    TxNavCmdPacket pkt;  // header/len defaulted by struct definition
-    pkt.lx       = static_cast<float>(msg->linear.x);
-    pkt.ly       = static_cast<float>(msg->linear.y);
-    pkt.az       = static_cast<float>(msg->angular.z);
-    pkt.mode     = current_mode_;
-    pkt.reserved = 0;
+  last_lx_ = static_cast<float>(msg->linear.x);
+  last_ly_ = static_cast<float>(msg->linear.y);
+  last_az_ = static_cast<float>(msg->angular.z);
+  sendControlPacket(last_lx_, last_ly_, last_az_, current_mode_);
+}
 
-    // CRC over [header..payload] = first (sizeof(pkt) - 2) bytes; the helper
-    // writes the trailing CRC16 in-place.
+void RMSerialDriver::sendHeartbeat()
+{
+  if (!serial_driver_->port() || !serial_driver_->port()->is_open()) {
+    return;
+  }
+  sendControlPacket(last_lx_, last_ly_, last_az_, current_mode_);
+}
+
+void RMSerialDriver::sendControlPacket(float lx, float ly, float az, uint8_t mode)
+{
+  try {
+    TxControlPacket pkt;
+    pkt.lx        = lx;
+    pkt.ly        = ly;
+    pkt.az        = az;
+    pkt.mode      = mode;
+    pkt.reserved  = 0;
+    pkt.ros_state = ros_state_;
+    pkt.reserved2 = 0;
+
     crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt));
 
     if (enable_vel_log_ && vel_log_file_.is_open()) {
@@ -291,43 +263,19 @@ void RMSerialDriver::sendNavCmd(const geometry_msgs::msg::Twist::SharedPtr msg)
                     << pkt.az << ',' << static_cast<int>(pkt.mode) << '\n';
     }
 
-    auto data = toVector(pkt);
+    const auto data = toVector(pkt);
     serial_driver_->port()->send(data);
 
     RCLCPP_DEBUG(
-      get_logger(), "TX NavCmd lx=%.3f ly=%.3f az=%.3f mode=%u (%zuB)",
+      get_logger(), "TX Control lx=%.3f ly=%.3f az=%.3f mode=%u (%zuB)",
       pkt.lx, pkt.ly, pkt.az, static_cast<unsigned>(pkt.mode), data.size());
   } catch (const std::exception & ex) {
     RCLCPP_ERROR_THROTTLE(
-      get_logger(), *get_clock(), 1000, "Error while sending NavCmd: %s", ex.what());
+      get_logger(), *get_clock(), 1000, "Error while sending Control: %s", ex.what());
     reopenPort();
   }
 }
 
-// ---------------------------------------------------------------------------
-// TX — Heartbeat (1Hz wall-clock timer).
-// ---------------------------------------------------------------------------
-void RMSerialDriver::sendHeartbeat()
-{
-  try {
-    if (!serial_driver_->port() || !serial_driver_->port()->is_open()) {
-      return;
-    }
-    TxHeartbeatPacket pkt;
-    pkt.ros_state = ros_state_;
-    pkt.reserved  = 0;
-    crc16::Append_CRC16_Check_Sum(reinterpret_cast<uint8_t *>(&pkt), sizeof(pkt));
-    auto data = toVector(pkt);
-    serial_driver_->port()->send(data);
-  } catch (const std::exception & ex) {
-    RCLCPP_WARN_THROTTLE(
-      get_logger(), *get_clock(), 5000, "Heartbeat send failed: %s", ex.what());
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Boilerplate — params + reopen
-// ---------------------------------------------------------------------------
 void RMSerialDriver::getParams()
 {
   using FlowControl = drivers::serial_driver::FlowControl;
@@ -409,6 +357,7 @@ void RMSerialDriver::getParams()
 void RMSerialDriver::reopenPort()
 {
   RCLCPP_WARN(get_logger(), "Attempting to reopen port");
+  rx_ring_.clear();
   while (rclcpp::ok()) {
     try {
       if (serial_driver_->port()->is_open()) {

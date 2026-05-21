@@ -140,42 +140,37 @@ void send_{{ p.name_camel }}Packet(void)
   Smsg_{{ p.key }}.header = {{ p.c_header_const }};
   Smsg_{{ p.key }}.len    = {{ p.payload_size }};
 
-{% if p.key == 'imu' %}
-  /* TODO: connect to project IMU/INS module. Default placeholder = 0. */
+{% if p.key == 'telemetry' %}
+  /* TODO: connect to project IMU/INS module. */
 #ifdef INS_H
-  Smsg_imu.gimbal_pitch     = -INS.Pitch / 57.3f;
-  Smsg_imu.gimbal_yaw       =  INS.Yaw   / 57.3f;
-  Smsg_imu.chassis_pitch    = -INS.Pitch / 57.3f;  /* TODO: replace with chassis IMU pitch */
-  Smsg_imu.chassis_yaw      =  INS.Yaw   / 57.3f;  /* TODO: replace with chassis IMU yaw */
+  Smsg_telemetry.gimbal_pitch  = -INS.Pitch / 57.3f;
+  Smsg_telemetry.gimbal_yaw    =  INS.Yaw   / 57.3f;
+  Smsg_telemetry.chassis_pitch = -INS.Pitch / 57.3f;  /* TODO: replace with chassis IMU pitch */
+  Smsg_telemetry.chassis_yaw   =  INS.Yaw   / 57.3f;  /* TODO: replace with chassis IMU yaw */
 #endif
-  Smsg_imu.mcu_timestamp_ms = (uint16_t)(now_ms() & 0xFFFF);
-{% elif p.key == 'chassis_feedback' %}
-  /* TODO: connect to referee.h Robot_Status / Projectile_Allowance / ModeControl */
+  Smsg_telemetry.mcu_timestamp_ms = (uint16_t)(now_ms() & 0xFFFF);
+  /* TODO: connect to referee.h / ModeControl — use cached values, refresh at 1Hz elsewhere */
 #ifdef REFEREE_H
-  Smsg_chassis_feedback.current_hp                = Robot_Status.current_HP;
-  Smsg_chassis_feedback.projectile_allowance_17mm = Projectile_Allowance.projectile_allowance_17mm;
+  Smsg_telemetry.current_hp                = Robot_Status.current_HP;
+  Smsg_telemetry.projectile_allowance_17mm = Projectile_Allowance.projectile_allowance_17mm;
+  Smsg_telemetry.game_progress             = Game_Status.game_progress;
+  Smsg_telemetry.stage_remain_time       = Game_Status.stage_remain_time;
+  Smsg_telemetry.team_colour             = (Robot_Status.robot_id < 100) ? 1 : 0;
+  Smsg_telemetry.rfid_base               = (RFID_Status.rfid_status == 1) ? 1 : 0;
+  Smsg_telemetry.ally_1_robot_hp         = Game_Robot_HP.ally_1_robot_HP;
+  Smsg_telemetry.ally_2_robot_hp         = Game_Robot_HP.ally_2_robot_HP;
+  Smsg_telemetry.ally_3_robot_hp         = Game_Robot_HP.ally_3_robot_HP;
+  Smsg_telemetry.ally_4_robot_hp         = Game_Robot_HP.ally_4_robot_HP;
+  Smsg_telemetry.ally_7_robot_hp         = Game_Robot_HP.ally_7_robot_HP;
+  Smsg_telemetry.ally_outpost_hp         = Game_Robot_HP.ally_outpost_HP;
+  Smsg_telemetry.ally_base_hp            = Game_Robot_HP.ally_base_HP;
+  Smsg_telemetry.event_data              = Game_Status.event_data;
 #endif
 #ifdef MODE_CONTROL_H
-  Smsg_chassis_feedback.chassis_power = ModeControl_GetChassisPower();
-  Smsg_chassis_feedback.chassis_mode  = (uint8_t)ModeControl_GetChassisMode();
+  Smsg_telemetry.chassis_power = ModeControl_GetChassisPower();
+  Smsg_telemetry.chassis_mode  = (uint8_t)ModeControl_GetChassisMode();
 #endif
-  Smsg_chassis_feedback.reserved = 0;
-{% elif p.key == 'referee' %}
-  /* TODO: connect to referee.h Game_Status / Game_Robot_HP / event */
-#ifdef REFEREE_H
-  Smsg_referee.game_progress     = Game_Status.game_progress;
-  Smsg_referee.stage_remain_time = Game_Status.stage_remain_time;
-  Smsg_referee.team_colour       = (Robot_Status.robot_id < 100) ? 1 : 0;
-  Smsg_referee.rfid_base         = (RFID_Status.rfid_status == 1) ? 1 : 0;
-  Smsg_referee.ally_1_robot_hp   = Game_Robot_HP.ally_1_robot_HP;
-  Smsg_referee.ally_2_robot_hp   = Game_Robot_HP.ally_2_robot_HP;
-  Smsg_referee.ally_3_robot_hp   = Game_Robot_HP.ally_3_robot_HP;
-  Smsg_referee.ally_4_robot_hp   = Game_Robot_HP.ally_4_robot_HP;
-  Smsg_referee.ally_7_robot_hp   = Game_Robot_HP.ally_7_robot_HP;
-  Smsg_referee.ally_outpost_hp   = Game_Robot_HP.ally_outpost_HP;
-  Smsg_referee.ally_base_hp      = Game_Robot_HP.ally_base_HP;
-  Smsg_referee.event_data        = Game_Status.event_data;
-#endif
+  Smsg_telemetry.reserved = 0;
 {% endif %}
 
   Append_CRC16_Check_Sum_Buf((uint8_t *)&Smsg_{{ p.key }}, sizeof(Smsg_{{ p.key }}));
@@ -203,19 +198,18 @@ static void parse_frame(const uint8_t *data, uint32_t total_len)
     case {{ p.c_header_const }}: {
       if (sizeof({{ p.c_struct_name }}) != total_len) return;
       memcpy(&Rmsg_{{ p.key }}, data, sizeof({{ p.c_struct_name }}));
-{% if p.key == 'nav_cmd' %}
-      g_navigation.lx           = Rmsg_nav_cmd.lx;
-      g_navigation.ly           = Rmsg_nav_cmd.ly;
-      g_navigation.az           = Rmsg_nav_cmd.az;
-      g_navigation.mode         = Rmsg_nav_cmd.mode;
-      g_navigation.reserved     = Rmsg_nav_cmd.reserved;
+{% if p.key == 'control' %}
+      g_navigation.lx           = Rmsg_control.lx;
+      g_navigation.ly           = Rmsg_control.ly;
+      g_navigation.az           = Rmsg_control.az;
+      g_navigation.mode         = Rmsg_control.mode;
+      g_navigation.reserved     = Rmsg_control.reserved;
       g_navigation.valid        = true;
       g_navigation.last_recv_ms = now_ms();
-{% elif p.key == 'heartbeat' %}
-      g_heartbeat.ros_state    = Rmsg_heartbeat.ros_state;
-      g_heartbeat.reserved     = Rmsg_heartbeat.reserved;
-      g_heartbeat.valid        = true;
-      g_heartbeat.last_recv_ms = now_ms();
+      g_heartbeat.ros_state     = Rmsg_control.ros_state;
+      g_heartbeat.reserved2     = Rmsg_control.reserved2;
+      g_heartbeat.valid         = true;
+      g_heartbeat.last_recv_ms  = now_ms();
 {% endif %}
       break;
     }

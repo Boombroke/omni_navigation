@@ -33,33 +33,33 @@ serial/serial_driver/
 └── package.xml
 ```
 
-## 3. 协议定义
+## 3. 协议定义（v3.1）
 
 ### 帧格式
-`[header 1B] [payload] [crc16 2B]`
-- CRC16 校验覆盖整帧数据（包含帧头）。
-- CRC16 以小端序（Little-endian） 2 字节附加在每包末尾。
-- 所有结构体使用 `__attribute__((packed))` 强制字节对齐，无填充。
+`[HEADER 1B][LEN 1B][PAYLOAD N B][CRC16 2B]`，总长 `N+4`
+- CRC16 覆盖 `[HEADER..PAYLOAD]`，小端序追加。
+- 结构体 `__attribute__((packed))`，无填充。
 
 ### 数据包列表
 
-| 帧头 | 包名 | 方向 | 大小 | 频率 | 字段列表 |
+| 帧头 | 包名 | 方向 | 大小 | 频率 | 说明 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| 0xA1 | IMU | stm32→ros | 11B | ~1000Hz | pitch(float,rad), yaw(float,rad) |
-| 0xA2 | Status | stm32→ros | 12B | ~10Hz | game_progress(u8), stage_remain_time(u16,s), current_hp(u16), projectile_allowance_17mm(u16), team_colour(u8, 1=red 0=blue), rfid_base(u8) |
-| 0xA3 | HP | stm32→ros | 17B | ~2Hz | ally_1..4_robot_hp, ally_7_robot_hp, ally_outpost_hp, ally_base_hp (均为 u16) |
-| 0xB5 | Nav | ros→stm32 | 15B | 随 cmd_vel | vel_x(float,m/s), vel_y(float,m/s), vel_w(float,rad/s) |
+| 0x50 | Telemetry | stm32→ros | 55B | 200Hz | IMU + 底盘反馈 + 裁判全量 |
+| 0xA0 | Control | ros→stm32 | 20B | 20Hz+1Hz | lx/ly/az/mode + ros_state（看门狗） |
 
 ## 4. ROS 接口
 
 | 话题 | 类型 | 方向 | 说明 |
 | :--- | :--- | :--- | :--- |
-| `/cmd_vel` | geometry_msgs/msg/Twist | Subscription | 接收速度指令，封装为 Nav 包发送至 STM32 |
-| `serial/gimbal_joint_state` | sensor_msgs/msg/JointState | Publication | 发布从 IMU 包解析的云台 pitch/yaw 角度 |
-| `referee/game_status` | rm_interfaces/msg/GameStatus | Publication | 发布从 Status 包解析的游戏阶段及剩余时间 |
-| `referee/robot_status` | rm_interfaces/msg/RobotStatus | Publication | 发布从 Status 包解析的当前血量及剩余弹量 |
-| `referee/all_robot_hp` | rm_interfaces/msg/GameRobotHP | Publication | 发布从 HP 包解析的 7 个己方单位血量值 |
-| `referee/rfidStatus` | rm_interfaces/msg/RfidStatus | Publication | 发布从 Status 包解析的 RFID 基地增益状态 |
+| `/cmd_vel_chassis` | geometry_msgs/msg/Twist | Subscription | 速度指令，封装为 Control 包发送 |
+| `motion_manager/state` | std_msgs/msg/UInt8 | Subscription | 模式 0–3，写入 Control.mode |
+| `serial/gimbal_joint_state` | sensor_msgs/msg/JointState | Publication | 云台 pitch/yaw |
+| `serial/chassis_attitude` | sensor_msgs/msg/JointState | Publication | 车体 pitch/yaw |
+| `serial/chassis_status` | std_msgs/msg/Float32MultiArray | Publication | [chassis_power, chassis_mode] |
+| `referee/game_status` | rm_interfaces/msg/GameStatus | Publication | 比赛阶段、剩余时间 |
+| `referee/robot_status` | rm_interfaces/msg/RobotStatus | Publication | 血量、弹量 |
+| `referee/all_robot_hp` | rm_interfaces/msg/GameRobotHP | Publication | 己方单位 HP |
+| `referee/rfidStatus` | rm_interfaces/msg/RfidStatus | Publication | RFID 基地增益 |
 
 ## 5. 参数配置
 
@@ -102,7 +102,7 @@ ros2 launch rm_serial_driver serial_driver.launch.py device_name:=/dev/ttyUSB0
 3. 手动同步生成的代码文件：
    - `generated/packet.hpp` → `include/rm_serial_driver/packet.hpp`
    - `generated/navigation_auto.h` → `example/navigation_auto.h`
-   - `generated/protocol.py` → `../../sentry_tools/protocol.py`
+   - `generated/protocol.py` → `../../../sentry_tools/protocol.py`
 4. 重新编译 ROS 包：
    ```bash
    colcon build --packages-select rm_serial_driver
@@ -163,13 +163,14 @@ ros2 launch rm_serial_driver serial_driver.launch.py enable_vel_log:=true
 ### CSV 格式
 
 ```csv
-timestamp_ns,vel_x,vel_y,vel_w
-1712345678000000000,1.23,-0.45,3.14
+timestamp_ns,lx,ly,az,mode
+1712345678000000000,1.23,-0.45,3.14,0
 ```
 
 - `timestamp_ns`：ROS 时间（纳秒）
-- `vel_x`, `vel_y`：body 系线速度（m/s），经 fake_vel_transform 旋转 + spin_speed 叠加后的最终值
-- `vel_w`：角速度（rad/s），含 spin_speed
+- `lx`, `ly`：body 系线速度（m/s）
+- `az`：角速度（rad/s）
+- `mode`：0=normal 1=spin_low 2=spin_high 3=estop
 
 ### 离线分析
 

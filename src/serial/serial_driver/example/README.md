@@ -1,4 +1,4 @@
-# 电控集成指南（v3.0 协议）
+# 电控集成指南（v3.1 协议）
 
 `navigation_auto.h` / `navigation_auto.c` 是哨兵 ROS 端 `rm_serial_driver` 与 STM32 电控之间的串口协议参考实现。两边各编译各的，**协议**由 `protocol/protocol.yaml` 单源定义，跑 `python3 generate.py` 同时刷新两端代码。
 
@@ -9,20 +9,19 @@
 ### 协议特点
 
 - **统一帧格式**：`[HEADER 1B][LEN 1B][PAYLOAD N B][CRC16 2B]`，总长 `N+4`
-- **分级频率**：高频 IMU 200Hz、中频反馈 / 指令 20Hz、低频裁判帧 1Hz
-- **双向心跳 + 看门狗**：ROS → MCU 1Hz `Heartbeat`，MCU 端 1500ms 无心跳自动急停
-- **mode 字段**：下行带 `mode` 让电控按 `normal / spin_low / spin_high / estop` 4 套 PID 工作
+- **单一大包**：上行 `0x50 Telemetry` 55B@200Hz；下行 `0xA0 Control` 20B@20Hz+1Hz
+- **看门狗**：任意 Control 帧 CRC 正确即刷新；1500ms 无下行则急停
+- **mode 字段**：Control 带 `mode`，电控按 `normal / spin_low / spin_high / estop` 4 套 PID
 
-### 与旧版 v2.x 差异
+### 版本差异
 
-| 项 | v2.x | v3.0 |
-|---|---|---|
-| 帧头标识 | `0x5B / 0xB5` 单帧头 | `0x5x` (上行) / `0xAx` (下行) 段位 |
-| LEN 字节 | 无（按帧头查表确定长度） | 有（未知 header 也能跳过整帧不错位） |
-| 上行包数 | 1 个（38B 大包） | 3 个（22 / 14 / 27B 分级） |
-| 下行包数 | 1 个（15B） | 2 个（NavCmd + Heartbeat） |
-| 模式字段 | 无 | NavCmd 带 `mode`，电控 4 套 PID |
-| 心跳 / 超时保护 | 无 | 1500ms 看门狗自动急停 |
+| 项 | v2.x | v3.0 | v3.1（当前） |
+|---|---|---|---|
+| 帧头标识 | `0x5B / 0xB5` | `0x5x` / `0xAx` 段位 | `0x50` / `0xA0` |
+| LEN 字节 | 无 | 有 | 有 |
+| 上行包数 | 1 个（38B） | 3 个分级 | **1 个（55B）** |
+| 下行包数 | 1 个（15B） | 2 个 | **1 个（20B）** |
+| 心跳 | 无 | 独立 0xA3 | 合入 Control |
 
 ### 提供的两个文件
 
@@ -85,7 +84,7 @@ void NavTask_Entry(void const *argument)
 {
   Navigation_Init();              // 内部清零所有静态结构 + 设置帧头
   for (;;) {
-    Navigation_Task();            // 周期分发器：处理看门狗 + 200/20/1Hz 上行
+    Navigation_Task();            // 周期分发器：看门狗 + 200Hz Telemetry 上行
     osDelay(1);                   // 1ms tick
   }
 }
@@ -184,61 +183,27 @@ if (!Navigation_IsLinkAlive()) {
 
 ## 5. 数据获取钩子（TODO 接线）
 
-`navigation_auto.c` 里 `send_*Packet()` 函数填字段时，所有 `TODO: connect to ...` 标记需要接到电控项目自身的数据源：
-
-### 5.1 `send_ImuPacket()` — 200Hz 姿态
+`send_TelemetryPacket()` 每 5ms 组一包，IMU 每帧更新，裁判/底盘字段建议 **1Hz 读入缓存、200Hz 只 memcpy**：
 
 ```c
 #ifdef INS_H
-  Smsg_imu.gimbal_pitch     = -INS.Pitch / 57.3f;     /* 度 → 弧度 */
-  Smsg_imu.gimbal_yaw       =  INS.Yaw   / 57.3f;
-  Smsg_imu.chassis_pitch    = -INS.Pitch / 57.3f;     /* TODO: 替换为车体 IMU pitch */
-  Smsg_imu.chassis_yaw      =  INS.Yaw   / 57.3f;     /* TODO: 替换为车体 IMU yaw */
+  Smsg_telemetry.gimbal_pitch  = -INS.Pitch / 57.3f;
+  Smsg_telemetry.gimbal_yaw    =  INS.Yaw   / 57.3f;
+  Smsg_telemetry.chassis_pitch = -INS.Pitch / 57.3f;  /* TODO: 车体 IMU */
+  Smsg_telemetry.chassis_yaw   =  INS.Yaw   / 57.3f;
 #endif
-  Smsg_imu.mcu_timestamp_ms = (uint16_t)(now_ms() & 0xFFFF);
-```
-
-| 字段 | 接到 |
-|---|---|
-| `gimbal_pitch / yaw` | 云台 IMU 解算结果（弧度） |
-| `chassis_pitch / yaw` | 车体 IMU；轮足姿态用 |
-| `mcu_timestamp_ms` | `HAL_GetTick()` 低 16 位，ROS 端用于估算端到端时延 |
-
-### 5.2 `send_ChassisFeedbackPacket()` — 20Hz 反馈
-
-```c
+  Smsg_telemetry.mcu_timestamp_ms = (uint16_t)(now_ms() & 0xFFFF);
 #ifdef REFEREE_H
-  Smsg_chassis_feedback.current_hp                = Robot_Status.current_HP;
-  Smsg_chassis_feedback.projectile_allowance_17mm = Projectile_Allowance.projectile_allowance_17mm;
+  Smsg_telemetry.current_hp                = Robot_Status.current_HP;
+  Smsg_telemetry.projectile_allowance_17mm = Projectile_Allowance.projectile_allowance_17mm;
+  Smsg_telemetry.game_progress             = Game_Status.game_progress;
+  /* ... ally_*_hp, event_data 等同理 ... */
 #endif
 #ifdef MODE_CONTROL_H
-  Smsg_chassis_feedback.chassis_power = ModeControl_GetChassisPower();
-  Smsg_chassis_feedback.chassis_mode  = (uint8_t)ModeControl_GetChassisMode();
+  Smsg_telemetry.chassis_power = ModeControl_GetChassisPower();
+  Smsg_telemetry.chassis_mode  = (uint8_t)ModeControl_GetChassisMode();
 #endif
 ```
-
-| 字段 | 接到 | 说明 |
-|---|---|---|
-| `current_hp` | `Robot_Status.current_HP` | 比赛规则有限制 |
-| `projectile_allowance_17mm` | `Projectile_Allowance.projectile_allowance_17mm` | 弹量决策 |
-| `chassis_power` | 电控功率监测模块（瓦） | ROS 端做功率管控避免被罚 |
-| `chassis_mode` | **当前实际模式**（不是收到的下行 mode） | 反馈下行有没有真落地 |
-
-### 5.3 `send_RefereePacket()` — 1Hz 裁判帧
-
-```c
-#ifdef REFEREE_H
-  Smsg_referee.game_progress     = Game_Status.game_progress;
-  Smsg_referee.stage_remain_time = Game_Status.stage_remain_time;
-  Smsg_referee.team_colour       = (Robot_Status.robot_id < 100) ? 1 : 0;
-  Smsg_referee.rfid_base         = (RFID_Status.rfid_status == 1) ? 1 : 0;
-  Smsg_referee.ally_1_robot_hp   = Game_Robot_HP.ally_1_robot_HP;
-  /* ... 其余 ally_*_hp 同理 ... */
-  Smsg_referee.event_data        = Game_Status.event_data;
-#endif
-```
-
-直接对接 DJI 裁判系统解析后的全局结构。
 
 ---
 
@@ -280,7 +245,7 @@ python3 src/sentry_tools/sentry_toolbox.py
 
 ### 7.2 实时可视化解析结果
 
-`sentry_tools/serial_visualizer.py` 直接解析 `protocol.py`（与 navigation_auto 同源），实时显示 5 个包的所有字段：
+`sentry_tools/serial_visualizer.py` 订阅 ROS 话题实时显示（与 Telemetry 字段对应）：
 
 ```bash
 python3 src/sentry_tools/serial_visualizer.py
@@ -290,14 +255,16 @@ python3 src/sentry_tools/serial_visualizer.py
 
 ```bash
 # 看 ROS 端日志（节点终端）
-[WARN] CRC failed on header 0x51        # CRC 算法不一致
-[WARN] LEN mismatch on 0x52: got 8 want 10  # 包结构对齐错误（检查 __attribute__((packed))）
+[WARN] CRC failed on header 0x50        # CRC 算法不一致
+[WARN] LEN mismatch on 0x50: got N want 51  # 包结构对齐错误
 [WARN] Unknown header 0x37, dropping byte   # 杂讯字节，单字节丢弃后会自动恢复
 
-# 看话题
-ros2 topic hz /serial/gimbal_joint_state    # 应稳定 200Hz
-ros2 topic hz /referee/robot_status         # 应稳定 20Hz
-ros2 topic hz /referee/game_status          # 应稳定 1Hz
+# 看话题（均由 Telemetry 大包拆分发布）
+ros2 topic hz /serial/gimbal_joint_state    # 应稳定 ~200Hz
+ros2 topic hz /referee/robot_status         # 应稳定 ~200Hz（字段来自 MCU 缓存）
+ros2 topic hz /referee/game_status          # 应稳定 ~200Hz
+
+# 静止 2s 后不应误 estop（ROS 1Hz 补发 Control）
 ```
 
 ### 7.4 心跳排查
@@ -358,23 +325,15 @@ colcon build --packages-select rm_serial_driver
 
 | 包 | 帧长 | 频率 | 带宽 |
 |---|---|---|---|
-| ImuPacket | 22 B | 200 Hz | 4400 B/s |
-| ChassisFeedback | 14 B | 20 Hz | 280 B/s |
-| RefereePacket | 27 B | 1 Hz | 27 B/s |
-| NavCmd | 18 B | 20 Hz | 360 B/s |
-| Heartbeat | 6 B | 1 Hz | 6 B/s |
-| **合计** | | | **5073 B/s（44%）** |
+| Telemetry | 55 B | 200 Hz | 11000 B/s |
+| Control | 20 B | ~21 Hz | ~420 B/s |
+| **合计** | | | **~11420 B/s（≈99%）** |
 
-可用带宽 ≈ 11520 B/s（每字节 10 bit），余量 56%，留给协议帧间隔与未来扩展。
+115200 baud 可用约 11520 B/s；余量紧时可升 **460800**（两端同改 `baud_rate`）。
 
 ### MCU CPU 开销
 
-`Navigation_Task()` 1kHz tick 内含 CRC 表查 + memcpy + USB 发送：
-- 200Hz IMU 包：每 5 ticks 一次 CRC + 22 字节 USB 发送，约 30μs
-- 20Hz 包：每 50 ticks 一次，几乎可忽略
-- 1Hz 包：每 1000 ticks 一次
-
-整体 CPU 占用 < 1%。USB CDC 端点拥塞才是瓶颈，**真要 500Hz IMU 时**升 baud 到 460800（需要两端同步改）。
+`Navigation_Task()` 1kHz：每 5 ticks 一次 55B CRC + USB 发送，整体仍 < 1% CPU。瓶颈多为 USB CDC 端点拥塞。
 
 ---
 
@@ -402,10 +361,8 @@ void Navigation_Task(void);                                    /* 1kHz 周期调
 void Navigation_OnUsbReceive(const uint8_t *data, uint32_t len);  /* CDC 收到字节就调 */
 bool Navigation_IsLinkAlive(void);                             /* 心跳活着？ */
 
-/* 主动发送（一般不用，Navigation_Task 内部按频率自动调） */
-void send_ImuPacket(void);
-void send_ChassisFeedbackPacket(void);
-void send_RefereePacket(void);
+/* 主动发送（Navigation_Task 内部 200Hz 自动调） */
+void send_TelemetryPacket(void);
 
 /* CRC 工具（已内嵌实现，业务无需调用） */
 void Append_CRC16_Check_Sum_Buf(uint8_t *buf, uint32_t len);
