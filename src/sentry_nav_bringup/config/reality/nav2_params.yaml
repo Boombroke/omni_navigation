@@ -173,7 +173,7 @@ fake_vel_transform:
 small_gicp_relocalization:
   ros__parameters:
     use_sim_time: false
-    num_threads: 8
+    num_threads: 4                                      # 8 → 4：留 4 核给 RViz/nav2/串口，避免 RViz 卡死
     num_neighbors: 20
     global_leaf_size: 0.2
     registered_leaf_size: 0.1
@@ -198,7 +198,7 @@ small_gicp_relocalization:
     emergency_min_score_threshold: 150000.0             # 200000 → 150000，配合放大半径放宽误匹配下限
     terrain_clearing_threshold: 0.1
     # 第三层：低频高质量 deep verification（异步线程跑，约 200-500ms/次，不阻塞 publishTransform）
-    enable_deep_verification: true
+    enable_deep_verification: false                     # 实车阶梯式关：deep target leaf 0.05 + 几十万 KD-tree 太重
     deep_verification_interval: 30.0                    # 30s 一次，长期 drift / 误匹配兜底
     deep_accumulated_count_threshold: 100               # 100 帧累积，比 periodic 稠密 5x
     deep_max_dist_sq: 225.0                             # 15m 关联半径，远大于 emergency 8m
@@ -214,7 +214,7 @@ small_gicp_relocalization:
     health_unhealthy_score_threshold: 50000.0           # 比 emergency_min_score(150000) 低，避免与单次失败重复
     health_stale_timeout_sec: 30.0                      # 30s 无成功样本也视为 unhealthy
     # 全局重定位（T2）：health monitor 触发，Scan Context 描述子查询 + GICP 精调
-    enable_global_relocalization: true
+    enable_global_relocalization: false                 # 实车阶梯式关：冷启动 SC 同步阻塞 1-2s 卡 RViz；改用 RViz 手拖兜底
     scan_context_db_file: ""                            # launch 启动时通过参数注入；为空则全局重定位禁用
     sc_num_rings: 20
     sc_num_sectors: 60
