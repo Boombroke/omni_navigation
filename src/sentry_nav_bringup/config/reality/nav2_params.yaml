@@ -373,7 +373,7 @@ controller_server:
     odom_topic: odometry
     controller_frequency: 30.0
     min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.5
+    min_y_velocity_threshold: 0.001  # omni 主线 vy 必须保留，起步时低速 vy 不得被吞
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugins: ["progress_checker"]
@@ -548,7 +548,7 @@ planner_server:
       cost_travel_multiplier: 3.0
       smooth_path: true
       smoother:
-        max_iterations: 1000
+        max_iterations: 200               # 1000 → 200，首次规划平滑耗时主要来源
         w_smooth: 0.3
         w_data: 0.2
         tolerance: 1.0e-10

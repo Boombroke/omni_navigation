@@ -309,7 +309,7 @@ bt_navigator:
     global_frame: map
     robot_base_frame: gimbal_yaw_fake
     odom_topic: odometry
-    bt_loop_duration: 100
+    bt_loop_duration: 30
     default_server_timeout: 100
     wait_for_service_timeout: 1000
     default_nav_to_pose_bt_xml: $(find-pkg-share sentry_nav_bringup)/behavior_trees/navigate_to_pose_w_replanning_and_recovery.xml
@@ -370,7 +370,7 @@ controller_server:
     odom_topic: odometry
     controller_frequency: 20.0
     min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.5
+    min_y_velocity_threshold: 0.001  # omni 主线 vy 必须保留，起步时低速 vy 不得被吞
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.3
     progress_checker_plugins: ["progress_checker"]
@@ -472,8 +472,8 @@ global_costmap:
   global_costmap:
     ros__parameters:
       use_sim_time: true
-      update_frequency: 5.0
-      publish_frequency: 2.0
+      update_frequency: 10.0              # 5.0 → 10.0，让首次 goal 到来时 costmap 更新更快
+      publish_frequency: 5.0               # 2.0 → 5.0
       global_frame: map
       robot_base_frame: gimbal_yaw_fake
       robot_radius: 0.2
@@ -543,11 +543,11 @@ planner_server:
       downsampling_factor: 1              # 代价地图层分辨率的倍数
       max_iterations: 1000000             # 搜索的最大总迭代次数，-1 禁用
       max_on_approach_iterations: 1000    # 一旦在容差范围内，尝试到达目标的最大迭代次数
-      max_planning_time: 3.5              # 最大规划时间（秒）
+      max_planning_time: 1.0              # 最大规划时间（秒），从 3.5 收紧避免首次规划长尾
       cost_travel_multiplier: 3.0         # 代价乘数，值越大路径越居中。全向轮建议 3.0 以确保走通道中央。
       smooth_path: true                   # 2D 节点始终平滑路径
       smoother:
-        max_iterations: 1000
+        max_iterations: 200               # 1000 → 200，首次规划平滑耗时主要来源
         w_smooth: 0.3
         w_data: 0.2
         tolerance: 1.0e-10
