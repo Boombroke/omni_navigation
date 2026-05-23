@@ -27,6 +27,7 @@ setup(
     entry_points={
         'console_scripts': [
             'match_recorder_node = sentry_match_recorder.match_recorder_node:main',
+            'merge_sortie = sentry_match_recorder.merge_sortie:main',
         ],
     },
 )

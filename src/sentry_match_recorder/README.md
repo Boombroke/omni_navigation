@@ -20,9 +20,11 @@ sentry_match_recorder/
 ├── sentry_match_recorder/
 │   ├── __init__.py
 │   ├── match_recorder_node.py                  # 状态机 + subprocess 管理
+│   ├── merge_sortie.py                         # 切片合并 CLI（独立入口）
 │   └── topics.yaml                             # 默认录制话题白名单（可被覆盖）
 ├── launch/match_recorder_launch.py             # 独立启动入口
 ├── config/recorder.yaml                        # 节点参数默认值
+├── test/test_merge_sortie.py                   # merge_sortie 自测脚本
 └── README.md
 ```
 
@@ -177,6 +179,36 @@ ros2 bag play logs/match-bags/sortie_20260521_143012
 ```bash
 ros2 bag info logs/match-bags/sortie_20260521_143012
 ```
+
+### 9.4 切片合并（`merge_sortie` CLI）
+
+录制目录原生是按 `--max-bag-duration` 切的多 mcap 切片，`ros2 bag play <dir>`
+能直接连续回放，但若想得到一个**独立 mcap 文件**用于离线分析、上传或第三方
+工具（Foxglove Studio、`mcap` CLI 等），用包内提供的合并工具：
+
+```bash
+# 合并到 <SORTIE_DIR>/<basename>_full.mcap，保留原切片
+ros2 run sentry_match_recorder merge_sortie logs/match-bags/sortie_20260521_143012
+
+# 自定义输出路径
+ros2 run sentry_match_recorder merge_sortie logs/match-bags/sortie_20260521_143012 \
+    --output /tmp/match01.mcap
+
+# 合并成功后删除原切片（节省磁盘）
+ros2 run sentry_match_recorder merge_sortie logs/match-bags/sortie_20260521_143012 \
+    --remove-shards
+
+# 仅列出会合并的切片，不实际写文件
+ros2 run sentry_match_recorder merge_sortie logs/match-bags/sortie_20260521_143012 \
+    --dry-run
+```
+
+实现细节：基于 `rosbag2_py` SequentialReader/Writer 直接拷贝序列化字节，
+不依赖任何具体 msg 类型可被 import；切片顺序优先读 `metadata.yaml` 的
+`relative_file_paths`，否则按文件名末尾的 `_<N>` 数字排序。
+
+自测：`python3 src/sentry_match_recorder/test/test_merge_sortie.py`
+（构造 2 个最小 mcap 切片合并并校验消息计数 / 话题集 / 字节往返）。
 
 ## 10. 验证用例
 
