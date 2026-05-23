@@ -19,7 +19,7 @@ namespace sentry_behavior
 
 PubGoalAction::PubGoalAction(
   const std::string & name, const BT::NodeConfig & conf, const BT::RosNodeParams & params)
-: BT::SyncActionNode(name, conf), node_(params.nh), last_publish_time_(0, 0, RCL_ROS_TIME)
+: BT::SyncActionNode(name, conf), node_(params.nh)
 {
 }
 
@@ -49,15 +49,12 @@ BT::NodeStatus PubGoalAction::tick()
     current_topic_ = topic_name;
   }
 
-  const rclcpp::Time now = node_->now();
-  if (
-    has_last_ && new_x == last_x_ && new_y == last_y_ &&
-    (now - last_publish_time_).seconds() < kThrottleSeconds) {
+  if (has_last_ && new_x == last_x_ && new_y == last_y_) {
     return BT::NodeStatus::SUCCESS;
   }
 
   geometry_msgs::msg::PoseStamped msg;
-  msg.header.stamp = now;
+  msg.header.stamp = node_->now();
   msg.header.frame_id = "map";
   msg.pose.position.x = new_x;
   msg.pose.position.y = new_y;
@@ -71,7 +68,6 @@ BT::NodeStatus PubGoalAction::tick()
 
   last_x_ = new_x;
   last_y_ = new_y;
-  last_publish_time_ = now;
   has_last_ = true;
   return BT::NodeStatus::SUCCESS;
 }

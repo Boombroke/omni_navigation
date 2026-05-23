@@ -36,10 +36,13 @@ namespace sentry_behavior
 // nav2 bt_navigator 订阅 /goal_pose 内部触发 navigate_to_pose action;
 // 因此与 NavigateTo 在 nav2 侧最终是同一条物理路径. 谁后到 nav2 谁覆盖.
 //
-// 节流: 与上次相同 (x,y) 且距上次 publish < throttle_duration_ 时直接返回 SUCCESS
-// 不重发. 避免 nav2 因 /goal_pose 同点重发反复 preempt 当前规划. **永远返回 SUCCESS,
-// 即便跳过 publish** —— 历史版本继承 RosTopicPubNode 时 setMessage return false 被
-// 基类翻译为 FAILURE, 让上层 Sequence FAILURE 整树退出, 是 BT 每秒重启的根因.
+// 节流: 相同 (x,y) 在 BT 当前 tree 实例生命周期内只 publish 一次. nav2 拿到 goal
+// 后会自己规划+跟随, 不需要 BT 反复重发. 任何重发都会触发 bt_navigator 的 goal
+// preemption + ComputePathToPose 重启, 中断 controller_server, 表现为路径执行卡顿.
+// xy 变化时立刻 publish (切换攻击点/补给点的响应性不受影响).
+// **永远返回 SUCCESS, 即便跳过 publish** —— 历史版本继承 RosTopicPubNode 时 setMessage
+// return false 被基类翻译为 FAILURE, 让上层 Sequence FAILURE 整树退出, 是 BT 每秒重启
+// 的根因.
 class PubGoalAction : public BT::SyncActionNode
 {
 public:
@@ -57,10 +60,7 @@ private:
 
   double last_x_{0.0};
   double last_y_{0.0};
-  rclcpp::Time last_publish_time_;
   bool has_last_{false};
-
-  static constexpr double kThrottleSeconds = 1.0;
 };
 
 }  // namespace sentry_behavior
