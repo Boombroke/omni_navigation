@@ -25,10 +25,9 @@
             </Sequence>
 
             <!-- do: 驻守中央高地点1 -->
-            <NavigateTo action_name="navigate_to_pose"
-                        goal_pose_x="9.17"
-                        goal_pose_y="4.07"
-                        error_code="{nav_error}"/>
+            <PubGoal topic_name="/goal_pose"
+                     goal_pose_x="9.17"
+                     goal_pose_y="4.07"/>
 
             <!-- else: 弹丸<=0 或 HP<=150 → 前往补给点2 -->
             <WhileDoElse>
@@ -43,10 +42,9 @@
               </Inverter>
 
               <!-- do: 继续补给 → 前往/留在补给点2 -->
-              <NavigateTo action_name="navigate_to_pose"
-                          goal_pose_x="-0.27"
-                          goal_pose_y="-3.94"
-                          error_code="{nav_error}"/>
+              <PubGoal topic_name="/goal_pose"
+                       goal_pose_x="-0.27"
+                       goal_pose_y="-3.94"/>
 
               <!-- else: HP>380 且 弹丸>=50，恢复完毕，下一tick巡逻层返回点1 -->
               <AlwaysSuccess/>
@@ -54,10 +52,9 @@
           </WhileDoElse>
 
           <!-- else: 前哨站 HP <= 0，立即前往点3 -->
-          <NavigateTo action_name="navigate_to_pose"
-                      goal_pose_x="3.27"
-                      goal_pose_y="-0.90"
-                      error_code="{nav_error}"/>
+          <PubGoal topic_name="/goal_pose"
+                   goal_pose_x="3.27"
+                   goal_pose_y="-0.90"/>
         </WhileDoElse>
       </KeepRunningUntilFailure>
     </Sequence>
@@ -80,12 +77,11 @@
       <input_port name="outpost_hp_min" default="1" type="int">outpost HP &lt; outpost_hp_min returns FAILURE</input_port>
       <input_port name="key_port" default="{@referee_gameRobotHP}">GameRobotHP port on blackboard</input_port>
     </Condition>
-    <Action ID="NavigateTo" editable="true">
-      <input_port name="action_name" default="navigate_to_pose">Action server name</input_port>
+    <Action ID="PubGoal" editable="true">
+      <input_port name="topic_name" default="/goal_pose">PoseStamped topic to publish</input_port>
       <input_port name="goal_pose_x"/>
       <input_port name="goal_pose_y"/>
       <input_port name="goal_pose_yaw" default="0.0" type="float">目标航向 (rad)</input_port>
-      <output_port name="error_code" type="int"/>
     </Action>
   </TreeNodesModel>
 </root>

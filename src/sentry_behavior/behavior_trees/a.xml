@@ -22,11 +22,10 @@
                             hp_min="150"
                             key_port="{@referee_robotStatus}"/>
                 <KeepRunningUntilFailure>
-                  <NavigateTo action_name="navigate_to_pose"
-                              goal_pose_x="3.71"
-                              goal_pose_y="-0.61"
-                              goal_pose_yaw="0.0"
-                              error_code="{nav_error}"/>
+                  <PubGoal topic_name="/goal_pose"
+                           goal_pose_x="3.71"
+                           goal_pose_y="-0.61"
+                           goal_pose_yaw="0.0"/>
                 </KeepRunningUntilFailure>
                 <WhileDoElse>
                   <Inverter>
@@ -42,11 +41,10 @@
                     </ReactiveSequence>
                   </Inverter>
                   <KeepRunningUntilFailure>
-                    <NavigateTo action_name="navigate_to_pose"
-                                goal_pose_x="-0.27"
-                                goal_pose_y="-3.94"
-                                goal_pose_yaw="0.0"
-                                error_code="{nav_error}"/>
+                    <PubGoal topic_name="/goal_pose"
+                             goal_pose_x="-0.27"
+                             goal_pose_y="-3.94"
+                             goal_pose_yaw="0.0"/>
                   </KeepRunningUntilFailure>
                   <AlwaysSuccess/>
                 </WhileDoElse>
@@ -84,17 +82,15 @@
       <input_port name="key_port"
                   default="{@referee_robotStatus}">RobotStatus port on blackboard</input_port>
     </Condition>
-    <Action ID="NavigateTo"
+    <Action ID="PubGoal"
             editable="true">
-      <input_port name="action_name"
-                  default="navigate_to_pose">Action server name</input_port>
+      <input_port name="topic_name"
+                  default="/goal_pose">PoseStamped topic to publish</input_port>
       <input_port name="goal_pose_x"/>
       <input_port name="goal_pose_y"/>
       <input_port name="goal_pose_yaw"
                   default="0.0"
                   type="float">目标航向 (rad)</input_port>
-      <output_port name="error_code"
-                   type="int"/>
     </Action>
   </TreeNodesModel>
 
