@@ -1,8 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <root BTCPP_format="4">
   <BehaviorTree ID="rmuc_2026_sentry">
-    <!-- 总闸: 比赛阶段 4 + 剩余时间 0~420s -->
-    <Sequence>
+    <!-- 总闸: 比赛阶段 4 + 剩余时间 0~420s
+         用 ReactiveSequence 让 IsGameStatus 每次 tick 都重判,
+         比赛中途 game_progress 变 5 时立刻 halt 当前 NavigateTo + 整树 FAILURE.
+         默认 Sequence 会 latch 在 idx>=1 不再回头 tick 第 0 个 IsGameStatus,
+         导致中途结束无法被检测. -->
+    <ReactiveSequence>
       <IsGameStatus max_remain_time="420"
                     min_remain_time="0"
                     expected_game_progress="4"
@@ -85,7 +89,7 @@
           </WhileDoElse>
         </KeepRunningUntilFailure>
       </Sequence>
-    </Sequence>
+    </ReactiveSequence>
   </BehaviorTree>
 
   <!-- Description of Node Models (used by Groot2) -->
