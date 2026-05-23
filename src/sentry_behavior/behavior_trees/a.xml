@@ -1,35 +1,71 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <root BTCPP_format="4">
   <BehaviorTree ID="a">
+    <!-- 多场比赛永循环外壳 (与 b.xml 同构):
+         外层 KeepRunningUntilFailure: 一场赛 SUCCESS 后 reset+RUNNING 重启等下一场.
+
+         一场赛 = Sequence:
+           1) RetryUntilSuccessful + Delay(500ms): 等比赛开始, 限速避免 RetryNode spam
+              GameStatus 缺失 / progress!=4 -> IsGameStatus FAILURE -> Delay 等 500ms -> retry
+              progress==4 -> IsGameStatus SUCCESS -> Delay SUCCESS -> 推进
+           2) ReactiveFallback: 比赛中
+              首项 Inverter(IsGameStatus): progress 翻非 4 时 SUCCESS -> 一场赛 SUCCESS -> 重启等下一场
+              次项 KeepRunning(主决策): 比赛中持续 publish goal -->
     <KeepRunningUntilFailure>
       <Sequence>
-        <IsGameStatus max_remain_time="420"
-                      min_remain_time="0"
-                      expected_game_progress="4"
-                      key_port="{@referee_gameStatus}"/>
-        <WhileDoElse>
-          <IsStatusOK ammo_min="1"
-                      ammo_max="65535"
-                      hp_min="150"
-                      key_port="{@referee_robotStatus}"/>
-          <PubGoal topic_name="/goal_pose"
-                   goal_pose_x="3.71"
-                   goal_pose_y="-0.61"
-                   goal_pose_yaw="0.0"/>
-          <WhileDoElse>
-            <IsStatusOK ammo_min="50"
-                        ammo_max="65535"
-                        hp_min="351"
-                        key_port="{@referee_robotStatus}"/>
-            <AlwaysSuccess/>
-            <KeepRunningUntilFailure>
+        <RetryUntilSuccessful num_attempts="-1">
+          <Delay delay_msec="500">
+            <IsGameStatus max_remain_time="420"
+                          min_remain_time="0"
+                          expected_game_progress="4"
+                          key_port="{@referee_gameStatus}"/>
+          </Delay>
+        </RetryUntilSuccessful>
+        <ReactiveFallback>
+          <Inverter>
+            <IsGameStatus max_remain_time="420"
+                          min_remain_time="0"
+                          expected_game_progress="4"
+                          key_port="{@referee_gameStatus}"/>
+          </Inverter>
+          <KeepRunningUntilFailure>
+            <WhileDoElse>
+              <!-- 条件: ammo>=1 且 HP>=150 -> 驻守攻击点 (3.71, -0.61) -->
+              <IsStatusOK ammo_min="1"
+                          ammo_max="65535"
+                          hp_min="150"
+                          key_port="{@referee_robotStatus}"/>
+
+              <!-- do: 攻击点 -->
               <PubGoal topic_name="/goal_pose"
-                       goal_pose_x="-0.27"
-                       goal_pose_y="-3.94"
+                       goal_pose_x="3.71"
+                       goal_pose_y="-0.61"
                        goal_pose_yaw="0.0"/>
-            </KeepRunningUntilFailure>
-          </WhileDoElse>
-        </WhileDoElse>
+
+              <!-- else: ammo<1 或 HP<150 -> 前往/留在补给点 (-0.27, -3.94),
+                        直到 ammo>=50 且 HP>=351 才回攻击层 -->
+              <WhileDoElse>
+                <Inverter>
+                  <Sequence>
+                    <IsStatusOK ammo_min="50"
+                                ammo_max="65535"
+                                hp_min="0"
+                                key_port="{@referee_robotStatus}"/>
+                    <IsStatusOK ammo_min="0"
+                                ammo_max="65535"
+                                hp_min="351"
+                                key_port="{@referee_robotStatus}"/>
+                  </Sequence>
+                </Inverter>
+                <PubGoal topic_name="/goal_pose"
+                         goal_pose_x="-0.27"
+                         goal_pose_y="-3.94"
+                         goal_pose_yaw="0.0"/>
+                <AlwaysSuccess/>
+              </WhileDoElse>
+            </WhileDoElse>
+          </KeepRunningUntilFailure>
+        </ReactiveFallback>
       </Sequence>
     </KeepRunningUntilFailure>
   </BehaviorTree>
