@@ -304,81 +304,96 @@ ros2 launch sentry_behavior sentry_behavior_launch.py \
 
 | 参数 | 类型 | 默认值 | 说明 |
 |:---|:---|:---|:---|
-| `target_tree` | string | `red` | 要执行的行为树名（XML 中的 `<BehaviorTree ID="xxx">` 属性） |
+| `target_tree` | string | `a` | 要执行的行为树名（XML 中的 `<BehaviorTree ID="xxx">` 属性） |
 
 ### 可用行为树
 
-| 文件 | 树名 (target_tree) | 适用场景 |
+当前 `src/sentry_behavior/behavior_trees/` 下仅有以下战术树（其余树名 `red` / `blue` / `rmul*` / `test_uphill` 等历史命名已删除，不再可用）：
+
+| 文件 | 树 ID (target_tree) | 适用场景 |
 |:---|:---|:---|
-| `RMUC.xml` | `red`, `blue` | RMUC 全场对抗赛，红/蓝方完整策略 |
-| `RMUC.xml` | `red_down_1`, `red_down_2` | RMUC 不同阶段子策略 |
-| `RMUC.xml` | `rmuc_yes`, `rmuc_no` | 前哨站存活/阵亡时的战术分支 |
-| `rmul.xml` | `rmul` | RMUL 3v3 基础巡逻策略 |
-| `rmul.xml` | `rmul1`, `rmul2` | RMUL 双点巡逻/激进策略 |
-| `test.xml` | `test_uphill` | 单目标点测试（调试用） |
+| `RMUC.xml` | `rmuc_2026_sentry` | RMUC 完整策略：HP/弹药滞回 + `NavigateTo` 真实 SUCCESS（一次到点即完成） |
+| `a.xml` | `a` | 防守驻守 + 致命撤退补给（多场比赛永循环），用 `PubGoal` fire-and-forget 维持驻守语义 |
+| `b.xml` | `b` | 在 a.xml 基础上增加 `IsOutpostStatusOK`：前哨站阵亡时改前往兜底点 3 |
+| `test_navigate.xml` | `test_navigate` | 两点往返 `NavigateTo` 调试树（不依赖裁判系统） |
 
-### 策略切换示例
+### 多场比赛永循环外壳（a.xml / b.xml）
 
-运行时动态切换行为树（通过修改参数或重启客户端）：
-```bash
-# 方法 1: 修改 sentry_behavior.yaml 中的 target_tree 后重启
-# 方法 2: 直接在 launch 参数中指定
-ros2 launch sentry_behavior sentry_behavior_launch.py target_tree:=rmul
+a.xml / b.xml 共用以下根结构，目的是裁判帧 progress 在 `4 → 5/0 → 4` 间反复跳变（多场比赛、暂停恢复）时整树不退出：
+
+```xml
+KeepRunningUntilFailure                <!-- 一场赛 SUCCESS 后 reset+RUNNING 重启等下一场 -->
+└─ Sequence
+   ├─ RetryUntilSuccessful(num_attempts=-1)
+   │  └─ Delay(delay_msec=500)         <!-- 500ms 限速防 spam -->
+   │     └─ IsGameStatus(progress=4)   <!-- 等比赛开始 -->
+   └─ ReactiveFallback
+      ├─ Inverter(IsGameStatus 4)      <!-- progress!=4 时 SUCCESS → 一场赛 SUCCESS -->
+      └─ KeepRunningUntilFailure       <!-- 比赛中持续运行的主决策子树 -->
+         └─ ReactiveSequence ...       <!-- 里面 PubGoal 持续驻守 -->
 ```
 
-### Groot2 可视化调试
+设计要点：
 
-1. 启动行为树服务后，Groot2 ZMQ 服务会自动在 `groot2_port` (默认 1667) 监听
-2. 打开 Groot2 应用，选择 "Connect to running tree"
-3. 输入 `localhost:1667`（或远程 IP）
-4. 可实时查看：
-   - 行为树执行路径和节点状态（Success/Failure/Running）
-   - 全局黑板变量的实时值
-   - 各节点的端口参数
+- **根用 `ReactiveSequence` 而非 `Sequence`（RMUC.xml）**：每 tick 重判 `IsGameStatus`，否则 `Sequence` 会 latch 在已 SUCCESS 的子节点，比赛切阶段时无法及时退出。RMUC.xml 之前曾因此问题被 `fix(behavior_trees/RMUC): 根 Sequence -> ReactiveSequence` 修过。
+- **`Delay(delay_msec=500)` 不可省略**：`RetryUntilSuccessful` 在子节点 FAILURE 时立即重 tick，比赛开始前 progress=0/1 持续 FAILURE 会让 Condition 节点以 ~4.5M 行/秒疯狂打日志（实测 357 MB/分钟）。Delay 把 retry 节奏限到 0.5s。
+- **a/b.xml 用 `PubGoal` 而非 `NavigateTo`**：`PubGoal` 是 fire-and-forget 的 `RosTopicPubNode<PoseStamped>`，发完即返回 SUCCESS，外层 `KeepRunningUntilFailure` 持续重发，实现"持续驻守"语义；机器人到点后即使 Nav2 进入 idle 也不退出主决策。`NavigateTo` 是 `RosActionNode<NavigateToPose>`，等真实 SUCCESS（到达目标），更适合 RMUC.xml / test_navigate.xml 这类一次性导航场景。
+
+### 策略切换
+
+```bash
+# 方法 1：修改 sentry_behavior.yaml 中的 target_tree 后重启
+# 方法 2：launch 参数覆盖
+ros2 launch sentry_behavior sentry_behavior_launch.py target_tree:=b
+```
+
+### Groot2 / btviz 可视化调试
+
+行为树服务启动后，Groot2 ZMQ 服务会自动在 `groot2_port` (默认 1667) 监听。
+
+**Groot2**：打开 Groot2 → "Connect to running tree" → 输入 `localhost:1667`（或远程 IP）。免费版有 20 节点限制，超出后部分节点不可见。
+
+**[btviz](https://github.com/Boombroke/btviz)**（推荐）：本仓库维护者编写的 Tauri 应用，无 20 节点限制，可视化协议与 Groot2 兼容（同样连 `localhost:1667`）。在节点数较多的 a.xml / b.xml / RMUC.xml 上更顺手。
+
+可实时查看：
+
+- 行为树执行路径和节点状态（Success/Failure/Running）
+- 全局黑板变量的实时值
+- 各节点的端口参数
 
 ### 自定义行为树节点一览
+
+> 本仓库**只**实现下列 5 个自定义节点，控制 / 装饰节点全部走 BT.CPP / BT.ROS2 自带的 `KeepRunningUntilFailure` / `RetryUntilSuccessful` / `Delay` / `WhileDoElse` / `ReactiveSequence` / `ReactiveFallback` / `Inverter` / `Sequence` / `AlwaysSuccess` 等。**没有** `RecoveryNode` / `RateController` / `TickAfterTimeout` / `Pursuit` / `BattlefieldInformation` / `IsRfidDetected` / `IsAttacked` / `IsDetectEnemy` / `IsHPAdd`，历史文档若有提及均为已删除节点。
 
 #### 条件节点 (Condition Nodes)
 
 | 节点名 | 黑板键 | 说明 | 关键端口 |
 |:---|:---|:---|:---|
-| `IsGameStatus` | `@referee_gameStatus` | 检查比赛阶段和剩余时间 | `expected_game_progress` (int), `min_remain_time` (int) |
-| `IsStatusOK` | `@referee_robotStatus` | 检查弹药、热量、血量是否满足阈值 | `ammo_min` (int), `heat_max` (int), `hp_min` (int) |
-| `IsRfidDetected` | `@referee_rfidStatus` | 检查是否在指定 RFID 区域 | `rfid_type` (string) |
-| `IsOutpostOk` | `@referee_allRobotHP` | 检查己方前哨站是否存活 | `key_port` (GameRobotHP) |
-| `IsAttacked` | `@referee_robotStatus` | 检测受击，输出云台方向 | 输出: `gimbal_yaw`, `gimbal_pitch` |
-| `IsDetectEnemy` | `@detector_armors` | 检查视觉系统是否检测到敌方 | `armor_id_list` (string), `max_distance` (float) |
-| `IsHPAdd` | `@referee_robotStatus` | 检测血量是否正在增加（正在补血） | `key_port` (RobotStatus) |
+| `IsGameStatus` | `@referee_gameStatus` | 检查比赛阶段（`expected_game_progress`）与剩余秒数区间 | `expected_game_progress` (int), `min_remain_time` (int), `max_remain_time` (int) |
+| `IsStatusOK` | `@referee_robotStatus` | 检查弹药 / 血量是否满足阈值；任一项越界返回 FAILURE | `ammo_min` (int, 默认 0), `ammo_max` (int, 默认 65535), `hp_min` (int, 默认 300) |
+| `IsOutpostStatusOK` | `@referee_robotsHP` | 检查己方前哨站 HP；低于阈值返回 FAILURE | `outpost_hp_min` (int, 默认 1) |
 
 #### 动作节点 (Action Nodes)
 
-| 节点名 | 说明 | 关键端口 |
-|:---|:---|:---|
-| `PubGoal` | 向 Nav2 发布目标位姿 | `goal_pose_x` (float), `goal_pose_y` (float), `topic_name` (string, 默认 `/goal_pose`) |
-| `Pursuit` | 利用 TF2 追踪敌方目标 | `key_port` (tracker_target), `topic_name` (string) |
-| `BattlefieldInformation` | 分析全场血量，输出战术权重 | `key_port` (GameRobotHP) → 输出 `weight` (0/1/2，用于 Switch3 路由) |
+| 节点名 | 类型 | 说明 | 关键端口 |
+|:---|:---|:---|:---|
+| `NavigateTo` | `RosActionNode<NavigateToPose>` | 调用 Nav2 `navigate_to_pose` action，等真实 SUCCESS / FAILURE | `goal_pose_x`, `goal_pose_y`, `goal_pose_yaw` (float, rad), `action_name`, `error_code` (output, int) |
+| `PubGoal` | `RosTopicPubNode<PoseStamped>` | 向 `/goal_pose` 话题发布一次目标，立即返回 SUCCESS（fire-and-forget） | `goal_pose_x`, `goal_pose_y`, `goal_pose_yaw`, `topic_name` (默认 `/goal_pose`) |
 
-#### 控制与装饰节点
-
-| 节点名 | 说明 | 关键端口 |
-|:---|:---|:---|
-| `RecoveryNode` | 双子节点恢复控制：子节点1失败则运行子节点2，然后重试 | `num_attempts` (int, 默认 999) |
-| `RateController` | 限制子节点 tick 频率 | `hz` (float, 默认 10) |
-| `TickAfterTimeout` | 上次成功后延迟指定秒数再 tick | `timeout` (float, 秒) |
+`PubGoal` 内部带去重状态（`feat(pub_goal): add state tracking to prevent duplicate goal publishing`），同坐标重复 tick 不会刷爆 `/goal_pose`。
 
 ### 黑板数据来源
 
-行为树服务端 (`sentry_behavior_server`) 订阅以下话题，并将数据写入全局黑板：
+行为树服务端 (`sentry_behavior_server`) 订阅以下裁判系统话题，并将消息整体写入全局黑板：
 
 | 黑板键 (使用 `@` 前缀访问) | 订阅话题 | 消息类型 |
 |:---|:---|:---|
 | `referee_gameStatus` | `referee/game_status` | `rm_interfaces/GameStatus` |
 | `referee_robotStatus` | `referee/robot_status` | `rm_interfaces/RobotStatus` |
+| `referee_robotsHP` | `referee/all_robot_hp` | `rm_interfaces/GameRobotHP` |
 | `referee_rfidStatus` | `referee/rfid_status` | `rm_interfaces/RfidStatus` |
-| `referee_allRobotHP` | `referee/all_robot_hp` | `rm_interfaces/GameRobotHP` |
-| `detector_armors` | `detector/armors` | `rm_interfaces/Armors` |
-| `tracker_target` | `tracker/target` | `rm_interfaces/Target` |
-| `nav_globalCostmap` | `global_costmap/costmap` | `nav2_msgs/Costmap` |
+
+> 视觉链黑板键 `@detector_armors` / `@tracker_target` 与 `@nav_globalCostmap` 在 omni 主线下已不再注入，依赖它们的 Pursuit / BattlefieldInformation 节点也一并移除。
 
 ---
 
@@ -776,5 +791,5 @@ ros2 launch location map_visualizer_launch.py
 ### 场景 7: 需要切换比赛策略
 
 1. 修改 `sentry_behavior.yaml` 中的 `target_tree` 值
-2. 或在 launch 命令中指定：`ros2 launch sentry_behavior sentry_behavior_launch.py target_tree:=rmul1`
-3. 可选树名参见[第 5 节 - 可用行为树](#可用行为树)
+2. 或在 launch 命令中指定：`ros2 launch sentry_behavior sentry_behavior_launch.py target_tree:=b`
+3. 可选树名（`a` / `b` / `rmuc_2026_sentry` / `test_navigate`）参见[第 5 节 - 可用行为树](#可用行为树)

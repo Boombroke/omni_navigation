@@ -157,7 +157,53 @@ ros2 launch sentry_behavior sentry_behavior_launch.py
 - 默认开启 PS4 手柄支持。
 - 键位映射：详见 sentry_nav_bringup/config/simulation/nav2_params.yaml 中 teleop_twist_joy_node 部分。
 
-## 8. 常见问题
+## 8. 比赛录制与回放
+
+`sentry_match_recorder` 在比赛进入 `game_progress=4` 上升沿自动启动 `ros2 bag record`，下降沿（progress 跳到 5/0/1 等）自动停止，单场所有切片归到一个目录。`rm_sentry_launch.py` 默认带录包，临时关用 `enable_recorder:=False`。
+
+### 8.1 自动录制（一键启动已内置）
+
+```bash
+# 默认带录包，比赛开始即自动录到 logs/match-bags/sortie_<TS>/
+ros2 launch sentry_nav_bringup rm_sentry_launch.py
+# 临时禁用录包（仍跑导航）
+ros2 launch sentry_nav_bringup rm_sentry_launch.py enable_recorder:=False
+```
+
+输出目录结构（rosbag2 的 `--max-bag-duration` 切片）：
+```
+logs/match-bags/
+└── sortie_20260521_143012/
+    ├── metadata.yaml
+    ├── sortie_20260521_143012_0.mcap   # 0~60s
+    ├── sortie_20260521_143012_1.mcap   # 60~120s
+    └── ...
+```
+
+### 8.2 整场连续回放
+
+`ros2 bag play` 直接传 sortie 目录即可，rosbag2 ≥ Jazzy 会按时间戳无缝拼接：
+```bash
+ros2 bag play logs/match-bags/sortie_20260521_143012
+```
+
+### 8.3 切片合并到单文件 (`merge_sortie`)
+
+需要把整场比赛合成一个 `.mcap` 文件用于 Foxglove Studio / `mcap` CLI / 上传归档时，用包内提供的合并工具：
+```bash
+# 默认输出到 <SORTIE_DIR>/<basename>_full.mcap
+ros2 run sentry_match_recorder merge_sortie logs/match-bags/sortie_20260521_143012
+
+# --remove-shards: 合并成功后删除原切片以节省磁盘
+ros2 run sentry_match_recorder merge_sortie <SORTIE_DIR> --remove-shards
+
+# --dry-run: 只打印将要合并的切片清单，不写文件
+ros2 run sentry_match_recorder merge_sortie <SORTIE_DIR> --dry-run
+```
+
+详细参数（话题白名单、debounce、单场最长录制时长等）见 `src/sentry_match_recorder/README.md`。
+
+## 9. 常见问题
 - **编译错误**: 请确保 small_gicp (>= v1.0.0) 已正确安装并位于系统路径中。
 - **仿真器无法启动**: 请检查 Gazebo Harmonic 是否已正确安装并能独立运行。
 - **Gazebo Play 按钮无响应**: Wayland 环境下的已知问题，设置 `QT_QPA_PLATFORM=xcb` 后重启 Gazebo，或使用命令行 unpause（见第 4.0 节）。

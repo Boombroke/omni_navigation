@@ -218,9 +218,9 @@ SmacPlannerHybrid 是一种基于 Hybrid A* 的规划器，能够生成符合机
 
 ### 4.4 Fake Vel Transform
 - **功能**: 最终的指令转换层。
-- **坐标补偿**: Nav2 输出的速度指令是相对于 `gimbal_yaw_fake` 或世界坐标系的。该模块根据当前云台相对于底盘的偏转角，将指令旋转到底盘坐标系下。
-- **底盘自转 (Spin)**: 哨兵在比赛中通常需要保持底盘自转以增加敌方瞄准难度。该模块负责叠加自转速度 `cmd_spin`。
-- **默认参数**: `init_spin_speed: 3.14` (180度/秒)。
+- **坐标补偿**: Nav2 在 `gimbal_yaw_fake`（不随云台旋转的虚拟系）下规划直线，避免云台自旋时 Nav2 看到底盘"原地打转"。该模块根据 TF 实时查询 `gimbal_yaw_fake → gimbal_yaw` 的相对偏转角，把 `cmd_vel_nav2_result` 的线速度旋回真实的 `gimbal_yaw` / 底盘系，输出到 `cmd_vel_chassis`，再下发到 Mecanum 插件 / `rm_serial_driver`。
+- **自旋速度叠加链路**: 模块订阅 `cmd_spin` (`example_interfaces/Float32`)，把收到的值缓存为 `spin_speed_`，并在每帧把 `aft_tf_vel.angular.z = twist.angular.z + spin_speed_`。这样 Nav2 输出的 `wz` 与战术层下发的持续自旋叠加，既能保持自旋骚扰又不打断转向修正。
+- **关键参数**: `cmd_spin_topic: "cmd_spin"`、`init_spin_speed: 0.0`（YAML 默认 0；上层用 `/cmd_spin` 持续推目标自旋角速度，比赛中典型值 ~3.14 rad/s）。`fake_robot_base_frame: "gimbal_yaw_fake"`、`robot_base_frame: "gimbal_yaw"` 决定坐标补偿的源/目标系。
 
 ---
 
