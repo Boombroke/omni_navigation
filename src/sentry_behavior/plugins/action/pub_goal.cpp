@@ -19,12 +19,17 @@ namespace sentry_behavior
 
 PubGoalAction::PubGoalAction(
   const std::string & name, const BT::NodeConfig & conf, const BT::RosNodeParams & params)
-: RosTopicPubNode<geometry_msgs::msg::PoseStamped>(name, conf, params)
+: BT::SyncActionNode(name, conf), node_(params.nh), last_publish_time_(0, 0, RCL_ROS_TIME)
 {
 }
 
-bool PubGoalAction::setMessage(geometry_msgs::msg::PoseStamped & msg)
+BT::NodeStatus PubGoalAction::tick()
 {
+  std::string topic_name;
+  if (!getInput<std::string>("topic_name", topic_name) || topic_name.empty()) {
+    throw BT::RuntimeError("missing port [topic_name]");
+  }
+
   auto res_x = getInput<float>("goal_pose_x");
   auto res_y = getInput<float>("goal_pose_y");
   if (!res_x) {
@@ -39,34 +44,46 @@ bool PubGoalAction::setMessage(geometry_msgs::msg::PoseStamped & msg)
   const double new_x = static_cast<double>(res_x.value());
   const double new_y = static_cast<double>(res_y.value());
 
-  if (has_last_ && new_x == last_x_ && new_y == last_y_) {
-    return false;  // 相同目标已发布过，跳过本次 publish，不干扰导航器当前规划
+  if (!publisher_ || current_topic_ != topic_name) {
+    publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, 1);
+    current_topic_ = topic_name;
   }
 
-  last_x_ = new_x;
-  last_y_ = new_y;
-  has_last_ = true;
+  const rclcpp::Time now = node_->now();
+  if (
+    has_last_ && new_x == last_x_ && new_y == last_y_ &&
+    (now - last_publish_time_).seconds() < kThrottleSeconds) {
+    return BT::NodeStatus::SUCCESS;
+  }
+
+  geometry_msgs::msg::PoseStamped msg;
+  msg.header.stamp = now;
+  msg.header.frame_id = "map";
   msg.pose.position.x = new_x;
   msg.pose.position.y = new_y;
-
-  msg.header.stamp = node_->now();
-  msg.header.frame_id = "map";
   msg.pose.position.z = 0.0;
   msg.pose.orientation.x = 0.0;
   msg.pose.orientation.y = 0.0;
   msg.pose.orientation.z = std::sin(yaw * 0.5f);
   msg.pose.orientation.w = std::cos(yaw * 0.5f);
-  return true;
+
+  publisher_->publish(msg);
+
+  last_x_ = new_x;
+  last_y_ = new_y;
+  last_publish_time_ = now;
+  has_last_ = true;
+  return BT::NodeStatus::SUCCESS;
 }
 
 BT::PortsList PubGoalAction::providedPorts()
 {
-  BT::PortsList additional_ports = {
+  return {
+    BT::InputPort<std::string>("topic_name", "/goal_pose", "PoseStamped topic to publish"),
     BT::InputPort<float>("goal_pose_x"),
     BT::InputPort<float>("goal_pose_y"),
     BT::InputPort<float>("goal_pose_yaw", 0.0f, "目标航向 (rad), 默认 0"),
   };
-  return providedBasicPorts(additional_ports);
 }
 
 }  // namespace sentry_behavior

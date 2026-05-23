@@ -15,8 +15,10 @@
 
 #include <string>
 
-#include "behaviortree_ros2/bt_topic_pub_node.hpp"
+#include "behaviortree_cpp/action_node.h"
+#include "behaviortree_ros2/ros_node_params.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "rclcpp/rclcpp.hpp"
 
 namespace sentry_behavior
 {
@@ -33,7 +35,12 @@ namespace sentry_behavior
 //
 // nav2 bt_navigator 订阅 /goal_pose 内部触发 navigate_to_pose action;
 // 因此与 NavigateTo 在 nav2 侧最终是同一条物理路径. 谁后到 nav2 谁覆盖.
-class PubGoalAction : public BT::RosTopicPubNode<geometry_msgs::msg::PoseStamped>
+//
+// 节流: 与上次相同 (x,y) 且距上次 publish < throttle_duration_ 时直接返回 SUCCESS
+// 不重发. 避免 nav2 因 /goal_pose 同点重发反复 preempt 当前规划. **永远返回 SUCCESS,
+// 即便跳过 publish** —— 历史版本继承 RosTopicPubNode 时 setMessage return false 被
+// 基类翻译为 FAILURE, 让上层 Sequence FAILURE 整树退出, 是 BT 每秒重启的根因.
+class PubGoalAction : public BT::SyncActionNode
 {
 public:
   PubGoalAction(
@@ -41,12 +48,19 @@ public:
 
   static BT::PortsList providedPorts();
 
-  bool setMessage(geometry_msgs::msg::PoseStamped & goal) override;
+  BT::NodeStatus tick() override;
 
 private:
+  rclcpp::Node::SharedPtr node_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr publisher_;
+  std::string current_topic_;
+
   double last_x_{0.0};
   double last_y_{0.0};
+  rclcpp::Time last_publish_time_;
   bool has_last_{false};
+
+  static constexpr double kThrottleSeconds = 1.0;
 };
 
 }  // namespace sentry_behavior
