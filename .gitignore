@@ -3,7 +3,9 @@ install/
 log/
 logs/
 AGENTS.md
+AGENTS.archive.md
 MEMORY.md
+MEMORY.archive.md
 .cache/
 .claude/
 __pycache__/
