@@ -23,14 +23,14 @@ def main():
     g = sub.add_parser("game")
     g.add_argument("--progress", type=int, default=4)
     g.add_argument("--remain", type=int, default=200)
-    g.add_argument("--rate-hz", type=float, default=5.0)
-    g.add_argument("--count", type=int, default=5)
+    g.add_argument("--rate-hz", type=float, default=10.0)
+    g.add_argument("--count", type=int, default=20)
 
     r = sub.add_parser("robot")
     r.add_argument("--hp", type=int, default=300)
     r.add_argument("--ammo", type=int, default=100)
-    r.add_argument("--rate-hz", type=float, default=5.0)
-    r.add_argument("--count", type=int, default=5)
+    r.add_argument("--rate-hz", type=float, default=10.0)
+    r.add_argument("--count", type=int, default=20)
 
     args, _ = parser.parse_known_args()
 
