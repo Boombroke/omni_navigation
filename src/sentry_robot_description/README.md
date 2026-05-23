@@ -2,9 +2,9 @@
 
 ![PolarBear Logo](https://raw.githubusercontent.com/SMBU-PolarBear-Robotics-Team/.github/main/.docs/image/polarbear_logo_text.png)
 
-SMBU PolarBear Team robot description package for RoboMaster 2025.
+SMBU PolarBear Team robot description package, ported to RoboMaster 2026 omni mainline by Boombroke.
 
-深圳北理莫斯科大学北极熊战队 - RoboMaster 2025 赛季通用机器人关节描述包。
+深圳北理莫斯科大学北极熊战队基础描述包，**Sentry26 omni 主线** 通用机器人关节描述。
 
 ## 1. Overview
 
@@ -26,8 +26,9 @@ SMBU PolarBear Team robot description package for RoboMaster 2025.
 
 ### 2.1 Setup Environment
 
-- Ubuntu 22.04
-- ROS: [Humble](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html)
+- Ubuntu 24.04
+- ROS: [Jazzy](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html)
+- 当前活跃模型：`sentry_robot.sdf.xmacro`（含 `MecanumDrive2` Gazebo 插件，omni 全向底盘）
 
 ### 2.2 Create Workspace
 
