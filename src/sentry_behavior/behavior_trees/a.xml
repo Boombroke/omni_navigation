@@ -1,78 +1,35 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <root BTCPP_format="4">
   <BehaviorTree ID="a">
-    <!-- 多场比赛永循环外壳:
-         外层 KeepRunningUntilFailure: child SUCCESS (一场赛跑完) -> resetChild + RUNNING -> 重启等下一场;
-                                       child FAILURE -> 整树 FAILURE 退出 (异常情况).
-
-         一场赛 = Sequence:
-           1) RetryUntilSuccessful + Delay(500ms): 等比赛开始, 限速避免 RetryNode 无限重 tick spam CPU
-              progress != 4 -> IsGameStatus FAILURE -> Delay 等 500ms -> RetryUntilSuccessful retry
-              progress == 4 -> IsGameStatus SUCCESS -> Delay SUCCESS -> RetryUntilSuccessful SUCCESS -> 推进
-           2) ReactiveFallback: 比赛中
-              首项 Inverter(IsGameStatus): progress 翻非 4 时 SUCCESS -> ReactiveFallback SUCCESS -> 一场赛 SUCCESS -> 外层 KeepRunning resetChild 重启等下一场
-              次项 KeepRunning(WhileDoElse 主决策): 比赛中持续 publish PubGoal -->
     <KeepRunningUntilFailure>
       <Sequence>
-        <RetryUntilSuccessful num_attempts="-1">
-          <Delay delay_msec="500">
-            <IsGameStatus max_remain_time="420"
-                          min_remain_time="0"
-                          expected_game_progress="4"
-                          key_port="{@referee_gameStatus}"/>
-          </Delay>
-        </RetryUntilSuccessful>
-        <ReactiveFallback>
-          <Inverter>
-            <IsGameStatus max_remain_time="420"
-                          min_remain_time="0"
-                          expected_game_progress="4"
-                          key_port="{@referee_gameStatus}"/>
-          </Inverter>
-          <KeepRunningUntilFailure>
-            <ReactiveSequence>
-              <IsGameStatus max_remain_time="420"
-                            min_remain_time="0"
-                            expected_game_progress="4"
-                            key_port="{@referee_gameStatus}"/>
+        <IsGameStatus max_remain_time="420"
+                      min_remain_time="0"
+                      expected_game_progress="4"
+                      key_port="{@referee_gameStatus}"/>
+        <WhileDoElse>
+          <IsStatusOK ammo_min="1"
+                      ammo_max="65535"
+                      hp_min="150"
+                      key_port="{@referee_robotStatus}"/>
+          <PubGoal topic_name="/goal_pose"
+                   goal_pose_x="3.71"
+                   goal_pose_y="-0.61"
+                   goal_pose_yaw="0.0"/>
+          <WhileDoElse>
+            <IsStatusOK ammo_min="50"
+                        ammo_max="65535"
+                        hp_min="351"
+                        key_port="{@referee_robotStatus}"/>
+            <AlwaysSuccess/>
             <KeepRunningUntilFailure>
-              <WhileDoElse>
-                <IsStatusOK ammo_min="1"
-                            ammo_max="65535"
-                            hp_min="150"
-                            key_port="{@referee_robotStatus}"/>
-                <KeepRunningUntilFailure>
-                  <PubGoal topic_name="/goal_pose"
-                           goal_pose_x="3.71"
-                           goal_pose_y="-0.61"
-                           goal_pose_yaw="0.0"/>
-                </KeepRunningUntilFailure>
-                <WhileDoElse>
-                  <Inverter>
-                    <ReactiveSequence>
-                      <IsStatusOK ammo_min="50"
-                                  ammo_max="65535"
-                                  hp_min="0"
-                                  key_port="{@referee_robotStatus}"/>
-                      <IsStatusOK ammo_min="0"
-                                  ammo_max="65535"
-                                  hp_min="351"
-                                  key_port="{@referee_robotStatus}"/>
-                    </ReactiveSequence>
-                  </Inverter>
-                  <KeepRunningUntilFailure>
-                    <PubGoal topic_name="/goal_pose"
-                             goal_pose_x="-0.27"
-                             goal_pose_y="-3.94"
-                             goal_pose_yaw="0.0"/>
-                  </KeepRunningUntilFailure>
-                  <AlwaysSuccess/>
-                </WhileDoElse>
-              </WhileDoElse>
+              <PubGoal topic_name="/goal_pose"
+                       goal_pose_x="-0.27"
+                       goal_pose_y="-3.94"
+                       goal_pose_yaw="0.0"/>
             </KeepRunningUntilFailure>
-          </ReactiveSequence>
-        </KeepRunningUntilFailure>
-        </ReactiveFallback>
+          </WhileDoElse>
+        </WhileDoElse>
       </Sequence>
     </KeepRunningUntilFailure>
   </BehaviorTree>

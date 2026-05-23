@@ -2,10 +2,7 @@ sentry_behavior_server:
   ros__parameters:
     use_sim_time: true
     action_name: sentry_behavior         # Optional
-    # 50ms/tick. 2Hz 是 RMUC.xml NavigateTo (action 单次触发) 时代默认; a.xml/b.xml 用 PubGoal
-    # 后多层 Sequence/ReactiveSequence 串下来, PubGoal 本体最坏 1+s 才被 tick 一次, 导致 goal
-    # 下发延迟数秒. 20Hz 远低于上游默认 100Hz, CPU 负担可忽略.
-    tick_frequency: 20
+    tick_frequency: 1                   # Optional (defaults to 100 Hz)
     groot2_port: 1667                    # Optional (defaults to 1667)
     # ros_plugins_timeout 同时作 RosActionNode 的 server_timeout +
     # wait_for_server_timeout. 仿真 nav2 lifecycle 启动较慢, 调大避免
