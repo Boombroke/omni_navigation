@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="b">
+    <!-- 比赛阶段4：驻守点1，弹丸<=0 或 HP<=150 → 补给点2，HP>380 且 弹丸>=50 → 返回点1，前哨站HP<=0 → 点3 -->
+    <Sequence>
+      <IsGameStatus max_remain_time="420"
+                    min_remain_time="0"
+                    expected_game_progress="4"
+                    key_port="{@referee_gameStatus}"/>
+
+      <KeepRunningUntilFailure>
+        <WhileDoElse>
+          <!-- 前哨站存活检查：HP > 0 则继续巡逻，否则立刻前往点3 -->
+          <IsOutpostStatusOK outpost_hp_min="1"
+                             key_port="{@referee_gameRobotHP}"/>
+
+          <!-- do: 前哨站存活，巡逻/补给循环 -->
+          <WhileDoElse>
+            <!-- 条件：弹丸>=1 且 HP>=151 → 安全驻守点1 -->
+            <Sequence>
+              <IsStatusOK ammo_min="1"
+                          key_port="{@referee_robotStatus}"/>
+              <IsStatusOK hp_min="151"
+                          key_port="{@referee_robotStatus}"/>
+            </Sequence>
+
+            <!-- do: 驻守中央高地点1 -->
+            <NavigateTo action_name="navigate_to_pose"
+                        goal_pose_x="9.17"
+                        goal_pose_y="4.07"
+                        error_code="{nav_error}"/>
+
+            <!-- else: 弹丸<=0 或 HP<=150 → 前往补给点2 -->
+            <WhileDoElse>
+              <!-- 条件：未恢复到战斗状态 (HP<=380 或 弹丸<50) -->
+              <Inverter>
+                <Sequence>
+                  <IsStatusOK ammo_min="50"
+                              key_port="{@referee_robotStatus}"/>
+                  <IsStatusOK hp_min="381"
+                              key_port="{@referee_robotStatus}"/>
+                </Sequence>
+              </Inverter>
+
+              <!-- do: 继续补给 → 前往/留在补给点2 -->
+              <NavigateTo action_name="navigate_to_pose"
+                          goal_pose_x="-0.27"
+                          goal_pose_y="-3.94"
+                          error_code="{nav_error}"/>
+
+              <!-- else: HP>380 且 弹丸>=50，恢复完毕，下一tick巡逻层返回点1 -->
+              <AlwaysSuccess/>
+            </WhileDoElse>
+          </WhileDoElse>
+
+          <!-- else: 前哨站 HP <= 0，立即前往点3 -->
+          <NavigateTo action_name="navigate_to_pose"
+                      goal_pose_x="3.27"
+                      goal_pose_y="-0.90"
+                      error_code="{nav_error}"/>
+        </WhileDoElse>
+      </KeepRunningUntilFailure>
+    </Sequence>
+  </BehaviorTree>
+
+  <TreeNodesModel>
+    <Condition ID="IsGameStatus" editable="true">
+      <input_port name="max_remain_time" default="420">Maximum remaining time (s)</input_port>
+      <input_port name="min_remain_time" default="0">Minimum remaining time (s)</input_port>
+      <input_port name="expected_game_progress" default="4">Expected game progress stage</input_port>
+      <input_port name="key_port" default="{@referee_gameStatus}">GameStatus port on blackboard</input_port>
+    </Condition>
+    <Condition ID="IsStatusOK">
+      <input_port name="ammo_min" default="0" type="int">ammo &lt; ammo_min returns FAILURE</input_port>
+      <input_port name="ammo_max" default="65535" type="int">ammo &gt; ammo_max returns FAILURE</input_port>
+      <input_port name="hp_min" default="300" type="int">HP &lt; hp_min returns FAILURE</input_port>
+      <input_port name="key_port" default="{@referee_robotStatus}">RobotStatus port on blackboard</input_port>
+    </Condition>
+    <Condition ID="IsOutpostStatusOK">
+      <input_port name="outpost_hp_min" default="1" type="int">outpost HP &lt; outpost_hp_min returns FAILURE</input_port>
+      <input_port name="key_port" default="{@referee_gameRobotHP}">GameRobotHP port on blackboard</input_port>
+    </Condition>
+    <Action ID="NavigateTo" editable="true">
+      <input_port name="action_name" default="navigate_to_pose">Action server name</input_port>
+      <input_port name="goal_pose_x"/>
+      <input_port name="goal_pose_y"/>
+      <input_port name="goal_pose_yaw" default="0.0" type="float">目标航向 (rad)</input_port>
+      <output_port name="error_code" type="int"/>
+    </Action>
+  </TreeNodesModel>
+</root>

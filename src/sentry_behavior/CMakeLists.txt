@@ -33,6 +33,7 @@ rclcpp_components_register_node(action_client
   PLUGIN sentry_behavior::SentryBehaviorClient
   EXECUTABLE sentry_behavior_client
 )
+ament_target_dependencies(action_client rm_interfaces)
 
 ####### Conditions #######
 ament_auto_add_library(is_game_status SHARED plugins/condition/is_game_status.cpp)
@@ -40,6 +41,9 @@ list(APPEND plugin_libs is_game_status)
 
 ament_auto_add_library(is_status_ok SHARED plugins/condition/is_status_ok.cpp)
 list(APPEND plugin_libs is_status_ok)
+
+ament_auto_add_library(is_outpost_status_ok SHARED plugins/condition/is_outpost_status_ok.cpp)
+list(APPEND plugin_libs is_outpost_status_ok)
 
 ####### Actions #######
 

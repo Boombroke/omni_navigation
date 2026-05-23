@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root BTCPP_format="4">
+  <BehaviorTree ID="test_navigate">
+    <!-- 测试：两点间往返移动 -->
+    <KeepRunningUntilFailure>
+      <Sequence>
+        <NavigateTo action_name="navigate_to_pose"
+                    goal_pose_x="3.79"
+                    goal_pose_y="0.28"
+                    error_code="{nav_error}"/>
+        <NavigateTo action_name="navigate_to_pose"
+                    goal_pose_x="1.79"
+                    goal_pose_y="0.26"
+                    error_code="{nav_error}"/>
+      </Sequence>
+    </KeepRunningUntilFailure>
+  </BehaviorTree>
+
+  <TreeNodesModel>
+    <Action ID="NavigateTo" editable="true">
+      <input_port name="action_name" default="navigate_to_pose">Action server name</input_port>
+      <input_port name="goal_pose_x"/>
+      <input_port name="goal_pose_y"/>
+      <input_port name="goal_pose_yaw" default="0.0" type="float">目标航向 (rad)</input_port>
+      <output_port name="error_code" type="int"/>
+    </Action>
+  </TreeNodesModel>
+</root>

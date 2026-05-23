@@ -68,7 +68,7 @@ def generate_launch_description():
 
     declare_target_tree_cmd = DeclareLaunchArgument(
         "target_tree",
-        default_value="red",
+        default_value="a",
         description="Behavior tree name to execute (must match a BehaviorTree ID in XML)",
     )
 

@@ -19,4 +19,4 @@ sentry_behavior_server:
 sentry_behavior_client:
   ros__parameters:
     use_sim_time: true
-    target_tree: rmuc_2026_sentry
+    target_tree: a

@@ -19,6 +19,7 @@
 #include <unordered_set>
 
 #include "behaviortree_cpp/xml_parsing.h"
+#include "rm_interfaces/msg/game_robot_hp.hpp"
 #include "rm_interfaces/msg/game_status.hpp"
 #include "rm_interfaces/msg/robot_status.hpp"
 namespace sentry_behavior
@@ -40,10 +41,9 @@ SentryBehaviorServer::SentryBehaviorServer(const rclcpp::NodeOptions & options)
   node()->declare_parameter("use_cout_logger", false);
   node()->get_parameter("use_cout_logger", use_cout_logger_);
 
-  // RMUC.xml 单决策树仅消费 GameStatus + RobotStatus, 其他 referee/视觉/costmap
-  // 历史订阅在 Stage 1 重构时随对应 plugin 一并清理
   subscribe<rm_interfaces::msg::GameStatus>("referee/game_status", "referee_gameStatus");
   subscribe<rm_interfaces::msg::RobotStatus>("referee/robot_status", "referee_robotStatus");
+  subscribe<rm_interfaces::msg::GameRobotHP>("referee/all_robot_hp", "referee_gameRobotHP");
 }
 
 bool SentryBehaviorServer::onGoalReceived(

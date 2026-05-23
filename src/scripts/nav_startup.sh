@@ -21,5 +21,6 @@ source install/setup.bash
 export LD_LIBRARY_PATH="/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 exec ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py \
-  slam:=True \
+  slam:=False \
+  world:=rmuc_2026 \
   use_robot_state_pub:=True

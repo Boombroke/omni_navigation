@@ -82,7 +82,7 @@ def generate_launch_description():
 
     declare_target_tree_cmd = DeclareLaunchArgument(
         "target_tree",
-        default_value="rmuc_2026_sentry",
+        default_value="1",
         description="Tactical behavior tree ID for sentry_behavior_client to execute",
     )
 
