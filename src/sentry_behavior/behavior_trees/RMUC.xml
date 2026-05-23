@@ -1,98 +1,100 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <root BTCPP_format="4">
-  <BehaviorTree ID="rmuc_2026_sentry">
-    <!-- 总闸: 比赛阶段 4 + 剩余时间 0~420s
-         用 ReactiveSequence 让 IsGameStatus 每次 tick 都重判,
-         比赛中途 game_progress 变 5 时立刻 halt 当前 NavigateTo + 整树 FAILURE.
-         默认 Sequence 会 latch 在 idx>=1 不再回头 tick 第 0 个 IsGameStatus,
-         导致中途结束无法被检测. -->
-    <ReactiveSequence>
-      <IsGameStatus max_remain_time="420"
-                    min_remain_time="0"
-                    expected_game_progress="4"
-                    key_port="{@referee_gameStatus}"/>
+  <BehaviorTree ID="rmuc_defend">
+    <!-- 防守守家策略 — 多场比赛永循环:
+         KeepRunningUntilFailure: child SUCCESS -> resetChild + RUNNING -> 等下一场;
+                                  child FAILURE -> 整树 FAILURE 退出.
+
+         一场赛 = Sequence:
+           1) 等比赛开始 (progress=4, 420~0s)
+           2) ReactiveFallback: 守家决策 + 比赛结束检测
+
+         守家逻辑:
+           - 非致命 (HP>150 且 ammo>0) -> 驻守防守点
+           - 致命 (HP<=150 或 ammo==0) -> 回补给区
+           - 补满 (HP>=400 且 ammo>=50) -> 返回防守点
+           - 滞回: 退出防守门槛低, 重新进入门槛高, 避免振荡 -->
+
+    <KeepRunningUntilFailure>
       <Sequence>
-        <!-- ===== 阶段一(一次性): 首点压制 → 补给 ===== -->
-        <Sequence>
-          <!-- 首点 (5.90, 4.15): 弹丸 >= 1 且 血量 >= 150 时驻守;
-               弹丸 == 0 或 血量 < 150 时离开.
-               WhileDoElse 是 reactive 控制流; do 分支用 KeepRunningUntilFailure
-               包住 NavigateTo, 这样 NavigateTo SUCCESS 后会自动重 reset 重发,
-               保持持续驻守语义, 直到 condition FAILURE 才走 else (AlwaysSuccess) 退出. -->
-          <WhileDoElse>
-            <IsStatusOK ammo_min="1"
-                        hp_min="150"
-                        key_port="{@referee_robotStatus}"/>
-            <KeepRunningUntilFailure>
-              <NavigateTo action_name="navigate_to_pose"
-                          goal_pose_x="5.90"
-                          goal_pose_y="4.15"/>
-            </KeepRunningUntilFailure>
-            <AlwaysSuccess/>
-          </WhileDoElse>
 
-          <!-- 补给区 (-0.94, -5.01): 满弹满血 (ammo >= 50 && hp >= 400) 即退出 -->
-          <WhileDoElse>
-            <Inverter>
-              <Sequence>
-                <IsStatusOK ammo_min="50"
-                            hp_min="0"
-                            key_port="{@referee_robotStatus}"/>
-                <IsStatusOK ammo_min="0"
-                            hp_min="400"
-                            key_port="{@referee_robotStatus}"/>
-              </Sequence>
-            </Inverter>
-            <KeepRunningUntilFailure>
-              <NavigateTo action_name="navigate_to_pose"
-                          goal_pose_x="-0.94"
-                          goal_pose_y="-5.01"/>
-            </KeepRunningUntilFailure>
-            <AlwaysSuccess/>
-          </WhileDoElse>
-        </Sequence>
+        <!-- ===== 等待比赛开始 ===== -->
+        <RetryUntilSuccessful num_attempts="-1">
+          <Delay delay_msec="500">
+            <IsGameStatus max_remain_time="420"
+                          min_remain_time="0"
+                          expected_game_progress="4"
+                          key_port="{@referee_gameStatus}"/>
+          </Delay>
+        </RetryUntilSuccessful>
 
-        <!-- ===== 阶段二(循环至比赛结束): 次点驻守 ↔ 补给 ===== -->
-        <KeepRunningUntilFailure>
-          <WhileDoElse>
-            <!-- 安全条件: 弹丸 >= 1 且 血量 >= 150 -->
-            <IsStatusOK ammo_min="1"
-                        hp_min="150"
-                        key_port="{@referee_robotStatus}"/>
+        <!-- ===== 比赛中 ===== -->
+        <ReactiveFallback>
+          <!-- 比赛结束: progress != 4 -> SUCCESS -> 一场赛结束 -> 外层重置等下一场 -->
+          <Inverter>
+            <IsGameStatus max_remain_time="420"
+                          min_remain_time="0"
+                          expected_game_progress="4"
+                          key_port="{@referee_gameStatus}"/>
+          </Inverter>
 
-            <!-- do: 持续驻守次点 (NavigateTo SUCCESS 后 KeepRunning 重发) -->
-            <KeepRunningUntilFailure>
-              <NavigateTo action_name="navigate_to_pose"
-                          goal_pose_x="5.56"
-                          goal_pose_y="-3.02"/>
-            </KeepRunningUntilFailure>
+          <!-- 主决策: 守点 <-> 补给 -->
+          <KeepRunningUntilFailure>
+            <ReactiveSequence>
+              <IsGameStatus max_remain_time="420"
+                            min_remain_time="0"
+                            expected_game_progress="4"
+                            key_port="{@referee_gameStatus}"/>
 
-            <!-- else: 弹丸 == 0 或 血量 < 150 → 回补给区, 满弹满血退出 -->
-            <WhileDoElse>
-              <Inverter>
-                <Sequence>
-                  <IsStatusOK ammo_min="50"
-                              hp_min="0"
-                              key_port="{@referee_robotStatus}"/>
-                  <IsStatusOK ammo_min="0"
-                              hp_min="400"
-                              key_port="{@referee_robotStatus}"/>
-                </Sequence>
-              </Inverter>
               <KeepRunningUntilFailure>
-                <NavigateTo action_name="navigate_to_pose"
-                            goal_pose_x="-0.94"
-                            goal_pose_y="-5.01"/>
+
+                <WhileDoElse>
+                  <!-- 条件: HP > 150 且 ammo > 0 -> 驻守防守点 -->
+                  <IsStatusOK ammo_min="1"
+                              ammo_max="65535"
+                              hp_min="151"
+                              key_port="{@referee_robotStatus}"/>
+                  <!-- do_A: 防守点 -->
+                  <KeepRunningUntilFailure>
+                    <PubGoal topic_name="/goal_pose"
+                             goal_pose_x="3.71"
+                             goal_pose_y="-0.61"
+                             goal_pose_yaw="0.0"/>
+                  </KeepRunningUntilFailure>
+                  <!-- do_B: ammo==0 或 HP<=150 -> 回补给 -->
+                  <WhileDoElse>
+                    <!-- 条件: HP >= 400 且 ammo >= 50 -> 已补满, 回防守点 -->
+                    <IsStatusOK ammo_min="50"
+                                ammo_max="65535"
+                                hp_min="400"
+                                key_port="{@referee_robotStatus}"/>
+                    <!-- do_A: 返回防守点 -->
+                    <KeepRunningUntilFailure>
+                      <PubGoal topic_name="/goal_pose"
+                               goal_pose_x="3.71"
+                               goal_pose_y="-0.61"
+                               goal_pose_yaw="0.0"/>
+                    </KeepRunningUntilFailure>
+                    <!-- do_B: 继续补给 -->
+                    <KeepRunningUntilFailure>
+                      <PubGoal topic_name="/goal_pose"
+                               goal_pose_x="-0.27"
+                               goal_pose_y="-3.94"
+                               goal_pose_yaw="0.0"/>
+                    </KeepRunningUntilFailure>
+                  </WhileDoElse>
+                </WhileDoElse>
+
               </KeepRunningUntilFailure>
-              <AlwaysSuccess/>
-            </WhileDoElse>
-          </WhileDoElse>
-        </KeepRunningUntilFailure>
+            </ReactiveSequence>
+          </KeepRunningUntilFailure>
+        </ReactiveFallback>
+
       </Sequence>
-    </ReactiveSequence>
+    </KeepRunningUntilFailure>
   </BehaviorTree>
 
-  <!-- Description of Node Models (used by Groot2) -->
+  <!-- Description of Node Models (used by Groot) -->
   <TreeNodesModel>
     <Condition ID="IsGameStatus"
                editable="true">
@@ -108,28 +110,26 @@
     <Condition ID="IsStatusOK">
       <input_port name="ammo_min"
                   default="0"
-                  type="int">ammo &lt; ammo_min returns FAILURE (inclusive: ammo &gt;= ammo_min OK)</input_port>
+                  type="int">ammo &lt; ammo_min returns FAILURE</input_port>
       <input_port name="ammo_max"
                   default="65535"
-                  type="int">ammo &gt; ammo_max returns FAILURE (inclusive: ammo &lt;= ammo_max OK)</input_port>
+                  type="int">ammo &gt; ammo_max returns FAILURE</input_port>
       <input_port name="hp_min"
                   default="300"
-                  type="int">HP &lt; hp_min returns FAILURE (inclusive: hp &gt;= hp_min OK)</input_port>
+                  type="int">HP &lt; hp_min returns FAILURE</input_port>
       <input_port name="key_port"
-                  default="{@referee_robotStatus}"
-                  type="rm_interfaces::msg::RobotStatus_&lt;std::allocator&lt;void&gt; &gt;">RobotStatus port on blackboard</input_port>
+                  default="{@referee_robotStatus}">RobotStatus port on blackboard</input_port>
     </Condition>
-    <Action ID="NavigateTo"
+    <Action ID="PubGoal"
             editable="true">
-      <input_port name="action_name"
-                  default="navigate_to_pose">Action server name (Nav2 navigate_to_pose)</input_port>
+      <input_port name="topic_name"
+                  default="/goal_pose">PoseStamped topic to publish</input_port>
       <input_port name="goal_pose_x"/>
       <input_port name="goal_pose_y"/>
       <input_port name="goal_pose_yaw"
                   default="0.0"
-                  type="float">目标航向 (rad), 默认 0</input_port>
-      <output_port name="error_code"
-                   type="int"/>
+                  type="float">目标航向 (rad)</input_port>
     </Action>
   </TreeNodesModel>
+
 </root>
