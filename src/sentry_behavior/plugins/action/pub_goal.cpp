@@ -36,10 +36,21 @@ bool PubGoalAction::setMessage(geometry_msgs::msg::PoseStamped & msg)
   float yaw = 0.0f;
   getInput<float>("goal_pose_yaw", yaw);
 
+  const double new_x = static_cast<double>(res_x.value());
+  const double new_y = static_cast<double>(res_y.value());
+
+  if (has_last_ && new_x == last_x_ && new_y == last_y_) {
+    return false;  // 相同目标已发布过，跳过本次 publish，不干扰导航器当前规划
+  }
+
+  last_x_ = new_x;
+  last_y_ = new_y;
+  has_last_ = true;
+  msg.pose.position.x = new_x;
+  msg.pose.position.y = new_y;
+
   msg.header.stamp = node_->now();
   msg.header.frame_id = "map";
-  msg.pose.position.x = res_x.value();
-  msg.pose.position.y = res_y.value();
   msg.pose.position.z = 0.0;
   msg.pose.orientation.x = 0.0;
   msg.pose.orientation.y = 0.0;

@@ -42,6 +42,11 @@ public:
   static BT::PortsList providedPorts();
 
   bool setMessage(geometry_msgs::msg::PoseStamped & goal) override;
+
+private:
+  double last_x_{0.0};
+  double last_y_{0.0};
+  bool has_last_{false};
 };
 
 }  // namespace sentry_behavior
