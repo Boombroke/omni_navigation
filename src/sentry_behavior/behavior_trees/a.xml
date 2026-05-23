@@ -1,20 +1,40 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <root BTCPP_format="4">
   <BehaviorTree ID="a">
-    <Repeat num_cycles="-1">
-      <ReactiveSequence>
+    <!-- 多场比赛永循环外壳:
+         外层 KeepRunningUntilFailure: child SUCCESS (一场赛跑完) -> resetChild + RUNNING -> 重启等下一场;
+                                       child FAILURE -> 整树 FAILURE 退出 (异常情况).
+
+         一场赛 = Sequence:
+           1) RetryUntilSuccessful + Delay(500ms): 等比赛开始, 限速避免 RetryNode 无限重 tick spam CPU
+              progress != 4 -> IsGameStatus FAILURE -> Delay 等 500ms -> RetryUntilSuccessful retry
+              progress == 4 -> IsGameStatus SUCCESS -> Delay SUCCESS -> RetryUntilSuccessful SUCCESS -> 推进
+           2) ReactiveFallback: 比赛中
+              首项 Inverter(IsGameStatus): progress 翻非 4 时 SUCCESS -> ReactiveFallback SUCCESS -> 一场赛 SUCCESS -> 外层 KeepRunning resetChild 重启等下一场
+              次项 KeepRunning(WhileDoElse 主决策): 比赛中持续 publish PubGoal -->
+    <KeepRunningUntilFailure>
+      <Sequence>
         <RetryUntilSuccessful num_attempts="-1">
-          <IsGameStatus max_remain_time="420"
-                        min_remain_time="0"
-                        expected_game_progress="4"
-                        key_port="{@referee_gameStatus}"/>
-        </RetryUntilSuccessful>
-        <KeepRunningUntilFailure>
-          <ReactiveSequence>
+          <Delay delay_msec="500">
             <IsGameStatus max_remain_time="420"
                           min_remain_time="0"
                           expected_game_progress="4"
                           key_port="{@referee_gameStatus}"/>
+          </Delay>
+        </RetryUntilSuccessful>
+        <ReactiveFallback>
+          <Inverter>
+            <IsGameStatus max_remain_time="420"
+                          min_remain_time="0"
+                          expected_game_progress="4"
+                          key_port="{@referee_gameStatus}"/>
+          </Inverter>
+          <KeepRunningUntilFailure>
+            <ReactiveSequence>
+              <IsGameStatus max_remain_time="420"
+                            min_remain_time="0"
+                            expected_game_progress="4"
+                            key_port="{@referee_gameStatus}"/>
             <KeepRunningUntilFailure>
               <WhileDoElse>
                 <IsStatusOK ammo_min="1"
@@ -52,8 +72,9 @@
             </KeepRunningUntilFailure>
           </ReactiveSequence>
         </KeepRunningUntilFailure>
-      </ReactiveSequence>
-    </Repeat>
+        </ReactiveFallback>
+      </Sequence>
+    </KeepRunningUntilFailure>
   </BehaviorTree>
 
   <!-- Description of Node Models (used by Groot) -->

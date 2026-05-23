@@ -14,7 +14,7 @@ import time
 import rclpy
 from rclpy.node import Node
 
-from rm_interfaces.msg import GameStatus, RobotStatus
+from rm_interfaces.msg import GameRobotHP, GameStatus, RobotStatus
 
 
 def main():
@@ -23,9 +23,11 @@ def main():
     parser.add_argument("--remain", type=int, default=200)
     parser.add_argument("--hp", type=int, default=300)
     parser.add_argument("--ammo", type=int, default=100)
+    parser.add_argument("--outpost-hp", type=int, default=1500)
     parser.add_argument("--rate-hz", type=float, default=5.0)
     parser.add_argument("--game-topic", default="referee/game_status")
     parser.add_argument("--robot-topic", default="referee/robot_status")
+    parser.add_argument("--hp-topic", default="referee/all_robot_hp")
     parser.add_argument("--namespace", default="")
     args, _ = parser.parse_known_args()
 
@@ -34,6 +36,7 @@ def main():
 
     g_pub = node.create_publisher(GameStatus, args.game_topic, 10)
     r_pub = node.create_publisher(RobotStatus, args.robot_topic, 10)
+    hp_pub = node.create_publisher(GameRobotHP, args.hp_topic, 10)
 
     g_msg = GameStatus()
     g_msg.game_progress = args.progress
@@ -44,6 +47,10 @@ def main():
     r_msg.current_hp = args.hp
     r_msg.projectile_allowance_17mm = args.ammo
     r_msg.maximum_hp = 400
+
+    hp_msg = GameRobotHP()
+    # 默认前哨站存活 (HP > 0), 让 IsOutpostStatusOK SUCCESS
+    hp_msg.ally_outpost_hp = args.outpost_hp
 
     period = 1.0 / args.rate_hz
     print(
@@ -73,6 +80,8 @@ def main():
                         r_msg.projectile_allowance_17mm = int(parts["ammo"])
                     if "progress" in parts:
                         g_msg.game_progress = int(parts["progress"])
+                    if "outpost" in parts:
+                        hp_msg.ally_outpost_hp = int(parts["outpost"])
         except FileNotFoundError:
             pass
         except Exception as e:
@@ -80,6 +89,7 @@ def main():
 
         g_pub.publish(g_msg)
         r_pub.publish(r_msg)
+        hp_pub.publish(hp_msg)
         rclpy.spin_once(node, timeout_sec=0.0)
         time.sleep(period)
 
