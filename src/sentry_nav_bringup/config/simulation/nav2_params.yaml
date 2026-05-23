@@ -533,7 +533,7 @@ map_saver:
 planner_server:
   ros__parameters:
     use_sim_time: true
-    expected_planner_frequency: 10.0
+    expected_planner_frequency: 2.0       # 与 BT RateController hz=5 + max_planning_time=5 现实匹配，避免周期性 warn
     planner_plugins: ["GridBased"]
     GridBased:
       plugin: "nav2_smac_planner::SmacPlanner2D"
@@ -543,15 +543,15 @@ planner_server:
       downsampling_factor: 1              # 代价地图层分辨率的倍数
       max_iterations: 1000000             # 搜索的最大总迭代次数，-1 禁用
       max_on_approach_iterations: 1000    # 一旦在容差范围内，尝试到达目标的最大迭代次数
-      max_planning_time: 1.0              # 最大规划时间（秒），从 3.5 收紧避免首次规划长尾
+      max_planning_time: 5.0              # 单次规划允许跑满，避免被中途 abort 后 BT RecoveryNode 反复重试 (1s × 3 retries = 4s 长尾)
       cost_travel_multiplier: 3.0         # 代价乘数，值越大路径越居中。全向轮建议 3.0 以确保走通道中央。
       smooth_path: true                   # 2D 节点始终平滑路径
       smoother:
-        max_iterations: 200               # 1000 → 200，首次规划平滑耗时主要来源
+        max_iterations: 50                # 200 → 50，平滑只是修边，A* 已经给出主路径
         w_smooth: 0.3
         w_data: 0.2
         tolerance: 1.0e-10
-        do_refinement: true
+        do_refinement: false              # refinement 再跑一遍 max_iterations，关掉省时
 
 smoother_server:
   ros__parameters:
