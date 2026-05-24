@@ -5,12 +5,22 @@
          外层 KeepRunningUntilFailure: 一场赛 SUCCESS 后 reset+RUNNING 重启等下一场.
 
          一场赛 = Sequence:
-           1) RetryUntilSuccessful + Delay(500ms): 等比赛开始, 限速避免 RetryNode spam
-              GameStatus 缺失 / progress!=4 -> IsGameStatus FAILURE -> Delay 等 500ms -> retry
-              progress==4 -> IsGameStatus SUCCESS -> Delay SUCCESS -> 推进
+           1) RetryUntilSuccessful + Delay(500ms): 等比赛开始, 限速避免 RetryNode spam.
+              GameStatus 缺失 / progress!=4 -> IsGameStatus FAILURE -> Delay 等 500ms -> retry.
+              progress==4 -> SUCCESS -> Delay SUCCESS -> 推进.
            2) ReactiveFallback: 比赛中
-              首项 Inverter(IsGameStatus): progress 翻非 4 时 SUCCESS -> 一场赛 SUCCESS -> 重启等下一场
-              次项 KeepRunning(主决策): 比赛中持续 publish goal -->
+              首项 Inverter(IsGameStatus): progress 翻非 4 时 SUCCESS -> 一场赛 SUCCESS -> 重启等下一场.
+              次项 KeepRunning(主决策): 比赛中持续 publish goal.
+
+         主决策为 Fallback (优先攻击, 次之补给), Fallback 内部用 ReactiveSequence
+         强制每 tick 重判 condition, 避免 BT.CPP 4 默认 Sequence with-memory 在
+         "hp 跌至阈值下"瞬间没有立刻让 condition 重新求值的 corner case.
+
+         阈值:
+           - 攻击需 ammo>=1 且 hp>=300 (放宽自原 hp>=150 的攻击门槛, 与"回家"门槛
+             更靠近, 减小迟滞带宽; 哨兵血量 350 这种离散值不会卡死).
+           - 不满足任一即去补给点, 在补给点期间血/弹补回 ammo>=1 且 hp>=300 后
+             自动回攻击层 (ReactiveSequence 每 tick 重判, 不需要二阈值出口). -->
     <KeepRunningUntilFailure>
       <Sequence>
         <RetryUntilSuccessful num_attempts="-1">
@@ -29,41 +39,25 @@
                           key_port="{@referee_gameStatus}"/>
           </Inverter>
           <KeepRunningUntilFailure>
-            <WhileDoElse>
-              <!-- 条件: ammo>=1 且 HP>=150 -> 驻守攻击点 (3.71, -0.61) -->
-              <IsStatusOK ammo_min="1"
-                          ammo_max="65535"
-                          hp_min="150"
-                          key_port="{@referee_robotStatus}"/>
-
-              <!-- do: 攻击点 -->
-              <PubGoal topic_name="/goal_pose"
-                       goal_pose_x="3.71"
-                       goal_pose_y="-0.61"
-                       goal_pose_yaw="0.0"/>
-
-              <!-- else: ammo<1 或 HP<150 -> 前往/留在补给点 (-0.27, -3.94),
-                        直到 ammo>=50 且 HP>=351 才回攻击层 -->
-              <WhileDoElse>
-                <Inverter>
-                  <Sequence>
-                    <IsStatusOK ammo_min="50"
-                                ammo_max="65535"
-                                hp_min="0"
-                                key_port="{@referee_robotStatus}"/>
-                    <IsStatusOK ammo_min="0"
-                                ammo_max="65535"
-                                hp_min="351"
-                                key_port="{@referee_robotStatus}"/>
-                  </Sequence>
-                </Inverter>
+            <Fallback>
+              <!-- 优先: ammo>=1 && hp>=300 -> 攻击点 -->
+              <ReactiveSequence>
+                <IsStatusOK ammo_min="1"
+                            ammo_max="65535"
+                            hp_min="300"
+                            key_port="{@referee_robotStatus}"/>
                 <PubGoal topic_name="/goal_pose"
-                         goal_pose_x="-0.27"
-                         goal_pose_y="-3.94"
+                         goal_pose_x="3.71"
+                         goal_pose_y="-0.61"
                          goal_pose_yaw="0.0"/>
-                <AlwaysSuccess/>
-              </WhileDoElse>
-            </WhileDoElse>
+              </ReactiveSequence>
+
+              <!-- 兜底: 任一阈值不满足 -> 补给点 -->
+              <PubGoal topic_name="/goal_pose"
+                       goal_pose_x="-0.27"
+                       goal_pose_y="-3.94"
+                       goal_pose_yaw="0.0"/>
+            </Fallback>
           </KeepRunningUntilFailure>
         </ReactiveFallback>
       </Sequence>

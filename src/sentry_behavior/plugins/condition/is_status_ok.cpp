@@ -39,7 +39,18 @@ BT::NodeStatus IsStatusOKCondition::checkRobotStatus()
   const bool is_hp_ok = (msg->current_hp >= hp_min);
   const bool is_ammo_ok = (msg->projectile_allowance_17mm >= ammo_min) &&
                           (msg->projectile_allowance_17mm <= ammo_max);
-  return (is_hp_ok && is_ammo_ok) ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+  const auto status = (is_hp_ok && is_ammo_ok) ? BT::NodeStatus::SUCCESS
+                                               : BT::NodeStatus::FAILURE;
+  // 限速 1Hz 打印当前判定, 便于诊断决策切换异常 (e.g. 血量已扣却没切补给).
+  // Clock 用 static 保持 throttle 内部状态; 否则每次 make_shared 重置就失效.
+  static rclcpp::Clock throttle_clock(RCL_STEADY_TIME);
+  RCLCPP_INFO_THROTTLE(
+    logger_, throttle_clock, 1000,
+    "IsStatusOK[%s] hp=%d/%d ammo=%d/[%d,%d] -> %s",
+    name().c_str(), msg->current_hp, hp_min,
+    msg->projectile_allowance_17mm, ammo_min, ammo_max,
+    status == BT::NodeStatus::SUCCESS ? "SUCCESS" : "FAILURE");
+  return status;
 }
 
 BT::PortsList IsStatusOKCondition::providedPorts()
