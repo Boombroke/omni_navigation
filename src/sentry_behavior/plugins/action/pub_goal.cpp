@@ -13,9 +13,26 @@
 #include "sentry_behavior/plugins/action/pub_goal.hpp"
 
 #include <cmath>
+#include <mutex>
+#include <unordered_map>
 
 namespace sentry_behavior
 {
+
+namespace
+{
+// 进程级共享: 每个 topic 上次实际 publish 出去的 (x,y).
+// 多个 PubGoal 节点 (攻击/补给/...) 在分支切换时通过它协调, 避免回切到老分支
+// 时被节点自身的 last 状态屏蔽掉真正必要的 publish.
+struct LastGoal
+{
+  double x{0.0};
+  double y{0.0};
+  bool has{false};
+};
+std::mutex g_last_goal_mtx;
+std::unordered_map<std::string, LastGoal> g_last_goal_per_topic;
+}  // namespace
 
 PubGoalAction::PubGoalAction(
   const std::string & name, const BT::NodeConfig & conf, const BT::RosNodeParams & params)
@@ -49,8 +66,12 @@ BT::NodeStatus PubGoalAction::tick()
     current_topic_ = topic_name;
   }
 
-  if (has_last_ && new_x == last_x_ && new_y == last_y_) {
-    return BT::NodeStatus::SUCCESS;
+  {
+    std::lock_guard<std::mutex> lk(g_last_goal_mtx);
+    auto & last = g_last_goal_per_topic[topic_name];
+    if (last.has && new_x == last.x && new_y == last.y) {
+      return BT::NodeStatus::SUCCESS;
+    }
   }
 
   geometry_msgs::msg::PoseStamped msg;
@@ -66,9 +87,16 @@ BT::NodeStatus PubGoalAction::tick()
 
   publisher_->publish(msg);
 
-  last_x_ = new_x;
-  last_y_ = new_y;
-  has_last_ = true;
+  {
+    std::lock_guard<std::mutex> lk(g_last_goal_mtx);
+    auto & last = g_last_goal_per_topic[topic_name];
+    last.x = new_x;
+    last.y = new_y;
+    last.has = true;
+  }
+  RCLCPP_INFO(
+    node_->get_logger(), "PubGoal[%s] published (%.2f, %.2f) -> %s",
+    name().c_str(), new_x, new_y, topic_name.c_str());
   return BT::NodeStatus::SUCCESS;
 }
 
