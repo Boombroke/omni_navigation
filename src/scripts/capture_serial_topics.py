@@ -62,14 +62,24 @@ def _stamp_to_epoch(d: Any) -> float | None:
 
 
 class SerialCapture(Node):
-    def __init__(self, topics: list[tuple[str, str]], out_path: Path, pretty: bool):
+    def __init__(
+        self,
+        topics: list[tuple[str, str]],
+        out_path: Path,
+        pretty: bool,
+        rate_hz: float,
+    ):
         super().__init__("serial_topic_capture")
         self.out_path = out_path
         self.pretty = pretty
+        # 每 topic 限速: rate_hz<=0 关闭限速; 否则相邻两条记录至少间隔 1/rate_hz 秒.
+        self.min_interval = (1.0 / rate_hz) if rate_hz > 0 else 0.0
+        self._last_emit: dict[str, float] = {}
         self._lock = threading.Lock()
         self._records: list[dict] = []  # only used when pretty=True
         self._fp = None if pretty else out_path.open("a", buffering=1, encoding="utf-8")
         self._count = 0
+        self._dropped = 0
 
         # 用 RELIABLE + KEEP_LAST(50) 与 rm_serial_driver 默认 QoS (history=10) 兼容
         qos = QoSProfile(
@@ -90,12 +100,20 @@ class SerialCapture(Node):
                 qos,
             )
             self.get_logger().info(f"subscribed {topic} ({type_str})")
-        self.get_logger().info(f"writing -> {out_path} (pretty={pretty})")
+        rate_desc = f"{rate_hz}Hz/topic" if rate_hz > 0 else "no rate limit"
+        self.get_logger().info(f"writing -> {out_path} (pretty={pretty}, {rate_desc})")
 
     def _on_msg(self, topic: str, type_str: str, msg) -> None:
+        now = time.time()
+        if self.min_interval > 0:
+            last = self._last_emit.get(topic, 0.0)
+            if now - last < self.min_interval:
+                self._dropped += 1
+                return
+            self._last_emit[topic] = now
         d = message_to_ordereddict(msg)
         rec = {
-            "t_wall": time.time(),
+            "t_wall": now,
             "t_msg": _stamp_to_epoch(d),
             "topic": topic,
             "type": type_str,
@@ -119,8 +137,11 @@ class SerialCapture(Node):
                 self._fp.flush()
                 self._fp.close()
                 self._fp = None
-            print(f"[capture_serial] wrote {self._count} messages -> {self.out_path}",
-                  file=sys.stderr)
+            print(
+                f"[capture_serial] wrote {self._count} messages, "
+                f"dropped {self._dropped} (rate-limited) -> {self.out_path}",
+                file=sys.stderr,
+            )
 
 
 def main() -> int:
@@ -143,6 +164,10 @@ def main() -> int:
         "--type", action="append", default=[], metavar="TOPIC=TYPE",
         help="extend known topic list, e.g. --type /custom=std_msgs/msg/Int32 (repeatable)",
     )
+    parser.add_argument(
+        "--rate-hz", type=float, default=10.0,
+        help="per-topic max emit rate (default 10Hz). Use 0 to disable rate limiting.",
+    )
     args = parser.parse_args()
 
     known = dict(DEFAULT_TOPICS)
@@ -164,7 +189,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     rclpy.init()
-    node = SerialCapture(topics, args.output, args.pretty)
+    node = SerialCapture(topics, args.output, args.pretty, args.rate_hz)
 
     stop_event = threading.Event()
 
