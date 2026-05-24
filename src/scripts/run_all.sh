@@ -17,7 +17,12 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# 注意: 本脚本不 source ROS / install/setup.bash, 子脚本 (run_*.sh) 各自处理.
+# AMENT_TRACE_SETUP_FILES unbound 报错的根因在子脚本, 见 commit f7f2c59 已修.
+
 PIDS=()
+
+# bash 旧版本对空数组 "${ARR[@]}" 在 set -u 下会报 unbound; 下面所有遍历用 :- 兜底.
 
 launch_with_prefix() {
   local tag="$1"; shift
@@ -29,19 +34,22 @@ cleanup() {
   local rc=${1:-0}
   echo
   echo "[run_all] stopping all subprocesses..."
-  for pid in "${PIDS[@]}"; do
+  for pid in "${PIDS[@]:-}"; do
+    [ -z "$pid" ] && continue
     kill -INT "$pid" 2>/dev/null || true
   done
   # 给 ros2 launch 一段时间优雅 shutdown lifecycle nodes
   for _ in $(seq 1 20); do
     local alive=0
-    for pid in "${PIDS[@]}"; do
+    for pid in "${PIDS[@]:-}"; do
+      [ -z "$pid" ] && continue
       kill -0 "$pid" 2>/dev/null && alive=1
     done
     [ "$alive" -eq 0 ] && break
     sleep 0.2
   done
-  for pid in "${PIDS[@]}"; do
+  for pid in "${PIDS[@]:-}"; do
+    [ -z "$pid" ] && continue
     if kill -0 "$pid" 2>/dev/null; then
       echo "[run_all] force kill pid=$pid"
       kill -KILL "$pid" 2>/dev/null || true
