@@ -26,6 +26,6 @@ set -u
 } >>"$LOG_FILE"
 
 # stdbuf -oL -eL: 行缓冲, 让日志实时写入而不是退出后才 flush
-exec stdbuf -oL -eL ros2 launch serial_driver serial_driver.launch.py "$@" \
+exec stdbuf -oL -eL ros2 launch rm_serial_driver serial_driver.launch.py "$@" \
   2> >(stdbuf -oL -eL tee -a "$LOG_FILE" >&2) \
   > >(stdbuf -oL -eL tee -a "$LOG_FILE")
