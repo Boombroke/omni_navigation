@@ -32,6 +32,14 @@ struct LastGoal
 };
 std::mutex g_last_goal_mtx;
 std::unordered_map<std::string, LastGoal> g_last_goal_per_topic;
+
+// 进程级共享 publisher: 所有 PubGoal 节点对同一 topic 复用同一个 publisher.
+// 不复用会导致只有第一个被 tick 的 PubGoal 节点的 publisher 被 bt_navigator
+// 早期订阅, 后续节点首次 tick 时新建的 publisher 因 DDS discovery 时序问题
+// 第一条消息可能不达 (实测: subscription_count 报 1 但 bt_navigator 没收到).
+std::mutex g_pub_mtx;
+std::unordered_map<std::string, rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr>
+  g_pub_per_topic;
 }  // namespace
 
 PubGoalAction::PubGoalAction(
@@ -61,10 +69,20 @@ BT::NodeStatus PubGoalAction::tick()
   const double new_x = static_cast<double>(res_x.value());
   const double new_y = static_cast<double>(res_y.value());
 
-  if (!publisher_ || current_topic_ != topic_name) {
-    publisher_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, 1);
-    current_topic_ = topic_name;
+  // 取/建进程级共享 publisher
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pub;
+  {
+    std::lock_guard<std::mutex> lk(g_pub_mtx);
+    auto it = g_pub_per_topic.find(topic_name);
+    if (it == g_pub_per_topic.end()) {
+      pub = node_->create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, 1);
+      g_pub_per_topic[topic_name] = pub;
+    } else {
+      pub = it->second;
+    }
   }
+  publisher_ = pub;
+  current_topic_ = topic_name;
 
   {
     std::lock_guard<std::mutex> lk(g_last_goal_mtx);
