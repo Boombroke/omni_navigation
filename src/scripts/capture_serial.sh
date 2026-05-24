@@ -14,9 +14,13 @@ LOG_DIR="$SENTRY_WS/logs"
 mkdir -p "$LOG_DIR"
 cd "$SENTRY_WS"
 
+# ROS / colcon 的 setup.bash 会引用 AMENT_TRACE_SETUP_FILES 等未定义变量
+# 在 set -u 下会炸. 临时关 -u source 完再恢复.
+set +u
 # shellcheck source=/dev/null
 source /opt/ros/jazzy/setup.bash
 # shellcheck source=/dev/null
 source install/setup.bash
+set -u
 
 exec python3 src/scripts/capture_serial_topics.py "$@"
