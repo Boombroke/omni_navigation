@@ -5,10 +5,11 @@
 # Ctrl+C 一并停止 (先 SIGINT 让 ros2 launch 走 lifecycle, 4s 内兜底 SIGKILL).
 #
 # 用法:
-#   bash src/scripts/run_all.sh                                          # 默认: 实车 nav + tree=a + 10Hz capture
+#   bash src/scripts/run_all.sh                                          # 默认: 实车 nav (world=rmuc_2026) + tree=a + 10Hz capture
+#   WORLD=rmul_2026 bash src/scripts/run_all.sh                          # 换场地; 命令行 world:= 优先级更高
 #   TARGET_TREE=b bash src/scripts/run_all.sh
 #   NAV_LAUNCH=rm_navigation_simulation_launch.py \
-#     bash src/scripts/run_all.sh world:=rmuc_2026 slam:=False           # 仿真; 透传给 nav
+#     WORLD=rmuc_2026 bash src/scripts/run_all.sh slam:=False            # 仿真; 透传给 nav
 #   CAPTURE_RATE_HZ=50 bash src/scripts/run_all.sh                       # 提高抓包频率
 #   CAPTURE_RATE_HZ=0  bash src/scripts/run_all.sh                       # 关限速 (会变非常大)
 #   ENABLE_CAPTURE=0   bash src/scripts/run_all.sh                       # 不抓串口
