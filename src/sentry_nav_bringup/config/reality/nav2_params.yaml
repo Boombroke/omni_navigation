@@ -372,6 +372,10 @@ controller_server:
     enable_stamped_cmd_vel: true
     odom_topic: odometry
     controller_frequency: 30.0
+    # 30Hz controller 一周期 33ms; odom→map TF 由 small_gicp 周期更新, 实测会
+    # 落后 controller 请求 10-30ms 触发 "extrapolation into the future" abort.
+    # 0.3s 给 TF 抖动留 9 个 controller 周期的兜底.
+    transform_tolerance: 0.3
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001  # omni 主线 vy 必须保留，起步时低速 vy 不得被吞
     min_theta_velocity_threshold: 0.001
@@ -398,7 +402,7 @@ controller_server:
       rotation_kp: 5.0
       rotation_ki: 0.1
       rotation_kd: 0.3
-      transform_tolerance: 0.1
+      transform_tolerance: 0.3                           # 与 controller_server 顶层一致, 对抗 odom→map TF 滞后
       min_max_sum_error: 1.0
       lookahead_dist: 2.0
       use_velocity_scaled_lookahead_dist: true
@@ -587,7 +591,7 @@ behavior_server:
     local_frame: odom
     global_frame: map
     robot_base_frame: gimbal_yaw_fake
-    transform_tolerance: 0.1
+    transform_tolerance: 0.3                              # 与 controller 一致
     simulate_ahead_time: 2.0
     max_rotational_vel: 1.0
     min_rotational_vel: 0.4
