@@ -85,7 +85,19 @@ BT::NodeStatus PubGoalAction::tick()
   msg.pose.orientation.z = std::sin(yaw * 0.5f);
   msg.pose.orientation.w = std::cos(yaw * 0.5f);
 
+  // 有订阅者才认为 publish "生效"; 否则保持 last 不变, 下个 tick 还会重发.
+  // 处理启动时序: BT 服务端比 nav2 bt_navigator 早就绪时, 第一次 publish
+  // 没有订阅者会丢, 但若我们 set has=true, 之后又被去重逻辑挡住永远不补发.
+  const size_t subs = publisher_->get_subscription_count();
   publisher_->publish(msg);
+
+  if (subs == 0) {
+    RCLCPP_WARN(
+      node_->get_logger(),
+      "PubGoal[%s] published (%.2f, %.2f) but %s has 0 subscribers, will retry next tick",
+      name().c_str(), new_x, new_y, topic_name.c_str());
+    return BT::NodeStatus::SUCCESS;
+  }
 
   {
     std::lock_guard<std::mutex> lk(g_last_goal_mtx);
