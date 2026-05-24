@@ -70,7 +70,7 @@ cleanup() {
   exit "$rc"
 }
 
-trap 'cleanup 0' INT TERM
+trap 'cleanup 0' INT TERM HUP
 
 launch_with_prefix "serial"   bash "$SCRIPT_DIR/run_serial.sh"
 launch_with_prefix "nav"      bash "$SCRIPT_DIR/run_nav.sh" "$@"
