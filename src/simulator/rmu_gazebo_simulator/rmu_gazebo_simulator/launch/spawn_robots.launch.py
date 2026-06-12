@@ -3,7 +3,6 @@ import os
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess
 from launch_ros.actions import Node
 from nav2_common.launch import ReplaceString
 from sdformat_tools.urdf_generator import UrdfGenerator
@@ -109,30 +108,17 @@ def generate_launch_description():
             parameters=[{"config_file": aft_replace_ros_bridge_params}],
         )
 
-        # Execute service call after spawning robots
-        # https://gazebosim.org/api/gazebo/6.9/levels.html#Runtime-performers
-        set_performer_service = ExecuteProcess(
-            cmd=[
-                "gz",
-                "service",
-                "-s",
-                "/world/default/level/set_performer",
-                "--reqtype",
-                "gz.msgs.StringMsg",
-                "--reptype",
-                "gz.msgs.Boolean",
-                "--timeout",
-                "2000",
-                "--req",
-                f'data: "{robot["name"]}"',
-            ],
-            output="screen",
-        )
+        # NOTE: set_performer 已移除。
+        # /world/.../level/set_performer 只在世界启用了 levels 系统并定义了 <level> 时才有意义。
+        # 当前世界 (rmuc_2026 等) 没有任何 <level> 定义, 调用它会注册一个父实体悬空的
+        # "performer" 实体 (perf_<robot>), 破坏物理实体表 (link not in entity map /
+        # Joint's parent model entity not found), 并使 GUI 渲染线程段错误崩溃
+        # (Intel iGPU 上尤为明显)。headless 能勉强容忍, 带 GUI 必崩。
+        # 此仿真不需要 levels/performer (单一连续场景), 故直接去掉。
 
         ld.add_action(spawn_robot)
         ld.add_action(robot_base)
         ld.add_action(robot_state_publisher)
         ld.add_action(robot_ign_bridge)
-        ld.add_action(set_performer_service)
 
     return ld

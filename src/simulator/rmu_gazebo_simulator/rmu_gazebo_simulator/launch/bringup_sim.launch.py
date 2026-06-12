@@ -10,7 +10,7 @@ from launch.actions import (
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 
 
 def generate_launch_description():
@@ -29,6 +29,7 @@ def generate_launch_description():
     manual_gz = LaunchConfiguration("manual_gz")
     headless = LaunchConfiguration("headless")
     spawn_delay = LaunchConfiguration("spawn_delay")
+    enable_referee = LaunchConfiguration("enable_referee")
 
     declare_manual_gz_cmd = DeclareLaunchArgument(
         "manual_gz",
@@ -46,6 +47,15 @@ def generate_launch_description():
         "spawn_delay",
         default_value="5.0",
         description="Seconds to wait before spawning robots (gives Gazebo time to stabilize)",
+    )
+
+    # 裁判系统 (pose_bridge / rfid_bridge / simple_competition) 只用于 RM 1v1 对抗计分,
+    # 与导航/SLAM 无关。其 pose_bridge 在 Jazzy/Harmonic (gz-transport 较新) 下会 SIGSEGV
+    # (上游 rmoss 代码与 Humble/Fortress 同源, 未适配)。默认关闭, 需要对抗时显式开启。
+    declare_enable_referee_cmd = DeclareLaunchArgument(
+        "enable_referee",
+        default_value="false",
+        description="Enable RoboMaster referee/scoring system (not needed for navigation).",
     )
 
     gazebo_launch = IncludeLaunchDescription(
@@ -73,10 +83,12 @@ def generate_launch_description():
     referee_system_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_simulator, "launch", "referee_system.launch.py")
-        )
+        ),
+        condition=IfCondition(enable_referee),
     )
 
-    # When Gazebo is auto-launched, delay spawning to let it stabilize
+    # When Gazebo is auto-launched, delay spawning to let it stabilize.
+    # Referee system is delayed alongside the robots but only when enabled.
     delayed_spawn = TimerAction(
         period=spawn_delay,
         actions=[spawn_robots_launch, referee_system_launch],
@@ -99,7 +111,9 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(pkg_simulator, "launch", "referee_system.launch.py")
         ),
-        condition=IfCondition(manual_gz),
+        condition=IfCondition(
+            PythonExpression(["'", manual_gz, "' == 'true' and '", enable_referee, "' == 'true'"])
+        ),
     )
 
     ld = LaunchDescription()
@@ -107,6 +121,7 @@ def generate_launch_description():
     ld.add_action(declare_manual_gz_cmd)
     ld.add_action(declare_headless_cmd)
     ld.add_action(declare_spawn_delay_cmd)
+    ld.add_action(declare_enable_referee_cmd)
 
     ld.add_action(gazebo_launch)
     ld.add_action(delayed_spawn)
