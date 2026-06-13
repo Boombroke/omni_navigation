@@ -3,10 +3,10 @@
 <package format="3">
   <name>nav2_plugins</name>
   <version>1.0.0</version>
-  <description>Extra plugin libs for Navigation2.</description>
-  <maintainer email="lihanchen2004@163.com">Lihan Chen</maintainer>
+  <description>Nav2 自定义插件集合：IntensityVoxelLayer（基于点云 intensity 的体素代价地图层）和 BackUpFreeSpace（后退到自由空间的恢复行为），配合 terrain_analysis 使用。</description>
+  <maintainer email="2218681402@qq.com">boombroke</maintainer>
   <license>Apache-2.0</license>
-  <author email="lihanchen2004@163.com">Lihan Chen</author>
+  <author email="2218681402@qq.com">boombroke</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <build_depend>nav2_common</build_depend>

@@ -104,11 +104,13 @@ sudo ufw allow 8765/tcp
 
 | 面板类型 | 用途 | 订阅话题 |
 |---------|------|---------|
-| **3D** | 地图 + 路径 + 机器人 + 点云 | `/map`, `/plan`, `/tf`, `/scan` |
+| **3D** | 地图 + 路径 + 机器人 + 点云 | `/map`, `/plan`, `/tf`, `/tf_static` |
 | **Map** | 2D costmap 细节 | `/global_costmap/costmap` 或 `/local_costmap/costmap` |
-| **Plot** | 速度/位置曲线 | `/cmd_vel`, `/odometry` |
+| **Plot** | 速度/位置曲线 | `/cmd_vel_chassis`（底盘最终速度指令）, `/odometry` |
 | **Log** | ROS 日志 | `/rosout` |
 | **Topic List** | 话题频率监控 | 自动发现 |
+
+> **命名空间提醒**：仿真默认命名空间 `red_standard_robot1`，所有话题带前缀，如 `/red_standard_robot1/cmd_vel_chassis`、`/red_standard_robot1/map`。实车默认命名空间为空，话题无前缀。在 Foxglove 面板中选择话题时注意确认前缀。
 
 ### 3.2 添加 3D 面板步骤
 
@@ -208,8 +210,10 @@ tailscale ip -4
 ros2 run foxglove_bridge foxglove_bridge --ros-args \
     -p port:=8765 \
     -p address:="0.0.0.0" \
-    -p topic_whitelist:="['/map', '/plan', '/tf', '/tf_static', '/scan', '/global_costmap/costmap', '/local_costmap/costmap', '/odometry', '/cmd_vel', '/rosout']"
+    -p topic_whitelist:="['/map', '/plan', '/tf', '/tf_static', '/global_costmap/costmap', '/local_costmap/costmap', '/odometry', '/cmd_vel_chassis', '/rosout']"
 ```
+
+> 若有命名空间（如仿真默认 `red_standard_robot1`），话题名需加前缀，例如 `/red_standard_robot1/cmd_vel_chassis`。
 
 ---
 
@@ -220,7 +224,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \
 | 连接失败 | 防火墙阻止 8765 端口 | `sudo ufw allow 8765/tcp` |
 | 连接失败 | IP 地址错误 | 在机器人端 `ip addr show` 确认 IP |
 | 浏览器 Web 版报 mixed content | HTTPS 页面不允许 ws:// | 改用桌面版，或用 wss:// + TLS 证书 |
-| 看不到话题 | namespace 不匹配 | 话题带 namespace 前缀，如 `/red_standard_robot1/map` |
+| 看不到话题 | namespace 不匹配 | 话题带 namespace 前缀，如 `/red_standard_robot1/cmd_vel_chassis`；实车默认无前缀 |
 | 3D 面板空白 | 没有选择 Fixed Frame | 在 3D 面板设置中把 Frame 改为 `map` |
 | 点云/costmap 卡顿 | 带宽不够 | 降频或用 topic_whitelist 限制 |
 | TF 报错 | use_sim_time 不匹配 | 确认 foxglove_bridge 和导航栈的 use_sim_time 一致 |

@@ -3,11 +3,10 @@
 <package format="3">
   <name>small_gicp_relocalization</name>
   <version>1.0.4</version>
-  <description>Using small_gicp to relocalize robot pose</description>
-  <maintainer email="boombroke@icloud.com">Boombroke</maintainer>
+  <description>基于 small_gicp 的全局重定位节点：将累积注册点云与先验 PCD 地图对齐，发布 map→odom TF，支持周期定位、深度验证与 Scan Context 全局重定位三层架构。</description>
+  <maintainer email="2218681402@qq.com">boombroke</maintainer>
   <license>Apache-2.0</license>
-  <author email="lihanchen2004@163.com">Lihan Chen</author>
-  <author email="boombroke@icloud.com">Boombroke</author>
+  <author email="2218681402@qq.com">boombroke</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

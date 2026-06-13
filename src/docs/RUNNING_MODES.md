@@ -75,7 +75,10 @@
 ```
 sentry_behavior (游戏策略 BT)
     │  决定 "去哪里"
-    │  PubGoal 发布目标到 /goal_pose
+    │  ├─ NavigateTo (RMUC.xml / test_navigate.xml)
+    │  │    → 调用 Nav2 navigate_to_pose action，等待真实 SUCCESS/FAILURE
+    │  └─ PubGoal (a.xml / b.xml)
+    │       → 发布目标到 /goal_pose，立即 SUCCESS (fire-and-forget)
     v
 Nav2 bt_navigator (导航 BT)
     │  决定 "怎么去"
@@ -468,30 +471,16 @@ ros2 launch location map_visualizer_launch.py
 
 ### 8.1 全局规划器
 
-**仿真使用 SmacPlannerHybrid，实车使用 ThetaStarPlanner**（实车配置中 SmacPlannerHybrid 已注释保留）。
+**仿真和实车均使用 `nav2_smac_planner::SmacPlanner2D`**。全向底盘无最小转弯半径约束，SmacPlanner2D（2D A*）在此场景下路径更简洁，计算开销低于 Hybrid A*。
 
-#### SmacPlannerHybrid (仿真)
+#### SmacPlanner2D（仿真 & 实车）
 
-| 参数 | 默认值 | 说明 |
+| 参数 | 值 | 说明 |
 |:---|:---|:---|
-| `motion_model_for_search` | `DUBIN` | 运动模型。虽然是全向底盘，Dubin 可生成更自然的路径 |
-| `minimum_turning_radius` | `0.05` | 最小转弯半径 (m)，设为极小值模拟全向移动 |
-| `angle_quantization_bins` | `64` | 角度搜索离散化精度 |
-| `cost_travel_multiplier` | `2.0` | 路径长度代价权重 |
-| `max_iterations` | `1000000` | 最大搜索迭代次数 |
-| `lookup_table_size` | `20.0` | 查找表大小 |
-| `smoother.max_iterations` | `1000` | 路径平滑迭代次数 |
-| `smoother.w_smooth` | `0.3` | 平滑权重 |
-| `smoother.w_data` | `0.2` | 数据保真权重 |
-
-#### ThetaStarPlanner (实车)
-
-| 参数 | 默认值 | 说明 |
-|:---|:---|:---|
-| `how_many_corners` | `8` | 搜索方向数量 (4 或 8) |
-| `w_euc_cost` | `1.0` | 欧几里得距离代价权重 |
-| `w_traversal_cost` | `2.0` | 代价地图穿越代价权重 |
-| `terminal_checking_interval` | `5000` | 终端检查间隔 |
+| `tolerance` | `0.5` | 无法到达精确位置的规划容差 (m) |
+| `allow_unknown` | `true` | 允许在未知空间中行驶 |
+| `downsample_costmap` | `false` | 是否对代价地图进行下采样 |
+| `max_iterations` | `1000000` | 最大搜索迭代次数，-1 禁用 |
 
 ### 8.2 局部控制器 - OmniPidPursuitController
 
@@ -534,14 +523,14 @@ ros2 launch location map_visualizer_launch.py
 
 ### 8.4 速度平滑器 (Velocity Smoother)
 
-| 参数 | 默认值 | 说明 |
-|:---|:---|:---|
-| `smoothing_frequency` | `20.0` | 平滑处理频率 (Hz) |
-| `max_velocity` | `[2.5, 2.5, 3.0]` | 最大速度 [vx, vy, vθ] (m/s, m/s, rad/s) |
-| `min_velocity` | `[-2.5, -2.5, -3.0]` | 最小速度（反向） |
-| `max_accel` | `[4.5, 4.5, 5.0]` | 最大加速度 [ax, ay, aθ] |
-| `max_decel` | `[-4.5, -4.5, -5.0]` | 最大减速度 |
-| `feedback` | `OPEN_LOOP` | 反馈模式。`OPEN_LOOP` 不依赖里程计反馈 |
+| 参数 | 仿真 | 实车 | 说明 |
+|:---|:---|:---|:---|
+| `smoothing_frequency` | `20.0` | `30.0` | 平滑处理频率 (Hz)，**必须与 `controller_frequency` 一致** |
+| `max_velocity` | `[2.5, 2.5, 3.0]` | `[1.5, 1.5, 3.0]` | 最大速度 [vx, vy, vθ] (m/s, m/s, rad/s) |
+| `min_velocity` | `[-2.5, -2.5, -3.0]` | `[-1.5, -1.5, -3.0]` | 最小速度（反向） |
+| `max_accel` | `[4.5, 4.5, 5.0]` | `[3.0, 3.0, 5.0]` | 最大加速度 [ax, ay, aθ] |
+| `max_decel` | `[-4.5, -4.5, -5.0]` | `[-3.0, -3.0, -5.0]` | 最大减速度 |
+| `feedback` | `OPEN_LOOP` | `OPEN_LOOP` | 反馈模式。`OPEN_LOOP` 不依赖里程计反馈 |
 
 ### 8.5 恢复行为插件
 
@@ -572,7 +561,7 @@ ros2 launch location map_visualizer_launch.py
 | `common.imu_topic` | `livox/imu` | `livox/imu` | IMU 输入话题 |
 | `preprocess.lidar_type` | `2` (Velodyne) | `1` (Livox) | LiDAR 类型: 1=Livox, 2=Velodyne, 3=Ouster |
 | `preprocess.scan_line` | `32` | `4` | 扫描线数（MID360 实际为 4 线） |
-| `preprocess.timestamp_unit` | `2` (微秒) | `3` (纳秒) | 时间戳单位: 0=秒, 1=毫秒, 2=微秒, 3=纳秒 |
+| `preprocess.timestamp_unit` | `0` (秒) | `3` (纳秒) | **仿真必须为 0**：`ign_sim_pointcloud_tool` 写入的每点时间戳单位是秒；设错会导致 Point-LIO 时间戳乱序 |
 | `preprocess.blind` | `0.5` | `0.2` | 盲区半径 (m)，过滤近距离噪声 |
 | `mapping.acc_norm` | `9.81` | `1.0` | 加速度单位：1.0=g, 9.81=m/s² |
 | `mapping.satu_acc` | `30.0` | `4.0` | IMU 加速度计饱和值 |
@@ -726,7 +715,7 @@ ros2 launch location map_visualizer_launch.py
 | **Point-LIO** | `lidar_type` | `2` (Velodyne) | `1` (Livox) | 仿真使用转换后的 Velodyne 格式 |
 | | `lid_topic` | `velodyne_points` | `livox/lidar` | 话题名不同 |
 | | `scan_line` | `32` | `4` | 仿真模拟的扫描线数不同 |
-| | `timestamp_unit` | `2` (微秒) | `3` (纳秒) | 时间戳格式不同 |
+| | `timestamp_unit` | `0` (秒) | `3` (纳秒) | **仿真必须为 0**：`ign_sim_pointcloud_tool` 写入的每点时间戳单位是秒 |
 | | `gravity` | `[0, -4.9, -8.49]` | `[2.64, 0, -9.68]` | LiDAR 安装角度不同 |
 | | `acc_norm` | `9.81` | `1.0` | 加速度单位不同 |
 | **GICP** | `max_dist_sq` | `9.0` | `3.0` | 仿真点云稀疏 |
@@ -734,11 +723,13 @@ ros2 launch location map_visualizer_launch.py
 | | `max_fitness_error` | `5.0` | `1.0` | 仿真误差大 |
 | | `max_iterations` | `50` | `20` | 仿真需更多迭代 |
 | | `num_threads` | `4` | `8` | 实车算力更强 |
-| **Nav2** | `controller_frequency` | `20.0` | `60.0` | 实车需要更高控制频率 |
+| **Nav2** | `controller_frequency` | `20.0` | `30.0` | 实车需要更高控制频率 |
 | | `costmap update_frequency` | `10.0` | `30.0` | 实车实时性要求更高 |
-| | `planner plugin` | `SmacPlannerHybrid` | `ThetaStarPlanner` | 不同规划策略 |
-| | `robot_radius` | `0.2` | `0.24` | 实车尺寸略大 |
+| | `planner plugin` | `SmacPlanner2D` | `SmacPlanner2D` | 仿真和实车均使用 2D A* |
+| | `robot_radius` | `0.2` | `0.30` | 实车尺寸略大（留余量）|
 | | `inflation_radius` | `0.7` | `0.5` | 实车场地较小 |
+| | `max_velocity` | `[2.5, 2.5, 3.0]` | `[1.5, 1.5, 3.0]` | 实车线速度上限更保守 |
+| | `max_accel` | `[4.5, 4.5, 5.0]` | `[3.0, 3.0, 5.0]` | 实车加速度上限 |
 | **地形** | `vehicleHeight` | `0.5` | `0.55` | 实车高度不同 |
 | | `minDyObsDis` | `0.3` | `0.5` | 实车动态障碍检测距离更大 |
 

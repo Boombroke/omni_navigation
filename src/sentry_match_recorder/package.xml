@@ -3,10 +3,11 @@
 <package format="3">
   <name>sentry_match_recorder</name>
   <version>0.1.0</version>
-  <description>Auto rosbag recorder triggered by referee game_progress (RoboMaster sentry)</description>
+  <description>Auto rosbag recorder triggered by referee game_progress for RoboMaster sentry robot. Debounced state machine spawns ros2 bag record on match start and stops on match end.</description>
 
-  <maintainer email="boombroke@icloud.com">Boombroke</maintainer>
+  <maintainer email="2218681402@qq.com">boombroke</maintainer>
   <license>Apache-2.0</license>
+  <author email="2218681402@qq.com">boombroke</author>
 
   <buildtool_depend>ament_python</buildtool_depend>
 

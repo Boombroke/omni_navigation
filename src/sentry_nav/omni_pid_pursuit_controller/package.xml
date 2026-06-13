@@ -3,9 +3,10 @@
 <package format="3">
   <name>omni_pid_pursuit_controller</name>
   <version>1.0.3</version>
-  <description>Omni Pure Pursuit Controller</description>
-  <maintainer email="lihanchen2004@163.com">Lihan Chen</maintainer>
+  <description>全向麦克纳姆底盘的 Nav2 控制器插件，实现纯跟踪加双 PID（平移/旋转）路径跟踪，支持曲率限速、障碍物检测与接近减速。插件类名：omni_pid_pursuit_controller::OmniPidPursuitController。</description>
+  <maintainer email="2218681402@qq.com">boombroke</maintainer>
   <license>Apache-2.0</license>
+  <author email="2218681402@qq.com">boombroke</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
