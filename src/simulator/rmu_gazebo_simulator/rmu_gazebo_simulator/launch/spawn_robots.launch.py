@@ -86,6 +86,7 @@ def generate_launch_description():
             executable="rmua19_robot_base",
             namespace=robot["name"],
             parameters=[robot_config, {"robot_name": robot["name"]}],
+            remappings=[("cmd_vel", "cmd_vel_chassis")],
         )
 
         robot_state_publisher = Node(
