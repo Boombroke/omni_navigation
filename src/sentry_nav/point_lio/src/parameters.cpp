@@ -246,6 +246,26 @@ void readParameters(std::shared_ptr<rclcpp::Node> & nh)
     // LOG(WARNING) << "unknown ivox_nearby_type, use NEARBY18";
     ivox_options_.nearby_type_ = IVoxType::NearbyType::NEARBY18;
   }
+  // VEC_FROM_ARRAY(v) reads v[0..2]; on a params-file miss get_parameter leaves these vectors
+  // empty and the deref SIGSEGVs at startup (outside the try/catch above). Normalise to safe
+  // sizes here; this also protects the shared-global uses in laserMapping.
+  auto ensure_param_size =
+    [&nh](std::vector<double> & v, size_t n, std::vector<double> fallback, const char * name) {
+      if (v.size() < n) {
+        RCLCPP_WARN(
+          nh->get_logger(),
+          "Parameter '%s' has %zu element(s) (<%zu) - not loaded from the params file? "
+          "Falling back to default. Verify the node name '%s' matches the YAML key.",
+          name, v.size(), n, nh->get_name());
+        v = std::move(fallback);
+      }
+    };
+  ensure_param_size(gravity, 3, {0.0, 0.0, -9.81}, "mapping.gravity");
+  ensure_param_size(gravity_init, 3, {0.0, 0.0, -9.81}, "mapping.gravity_init");
+  ensure_param_size(extrinT, 3, {0.0, 0.0, 0.0}, "mapping.extrinsic_T");
+  ensure_param_size(
+    extrinR, 9, {1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}, "mapping.extrinsic_R");
+
   p_imu->gravity_ << VEC_FROM_ARRAY(gravity);
 }
 
