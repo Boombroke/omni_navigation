@@ -1,10 +1,8 @@
 # rm_serial_driver
 
-## 1. 概述
+ROS2 串口驱动包，连接导航上位机与 STM32 电控端。通过 USB CDC / UART 双向传输：将导航速度指令封 Control 包下发至底盘，并实时接收云台姿态、底盘状态与裁判系统数据。以 Composable Node 形式运行，支持进程内通信。
 
-rm_serial_driver 是一个 ROS2 串口驱动包，作为 Nav2 导航栈与 STM32 电控端之间的通信桥梁。该包通过 USB CDC 或 UART 接口实现双向数据传输，将底盘速度指令下发至机器人底盘，并实时接收云台姿态、比赛状态及血量等关键信息。该节点采用 Composable Node 模式开发，支持高效的进程内通信。
-
-## 2. 目录结构
+## 目录结构
 
 ```
 serial/serial_driver/
@@ -33,21 +31,50 @@ serial/serial_driver/
 └── package.xml
 ```
 
-## 3. 协议定义（v3.1）
+## 协议 v3.1
 
 ### 帧格式
 `[HEADER 1B][LEN 1B][PAYLOAD N B][CRC16 2B]`，总长 `N+4`
 - CRC16 覆盖 `[HEADER..PAYLOAD]`，小端序追加。
 - 结构体 `__attribute__((packed))`，无填充。
 
-### 数据包列表
+### 数据包
 
-| 帧头 | 包名 | 方向 | 大小 | 频率 | 说明 |
+| 帧头 | 包名 | 方向 | 总帧大小 | 频率 | 说明 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| 0x50 | Telemetry | stm32→ros | 55B | 200Hz | IMU + 底盘反馈 + 裁判全量 |
-| 0xA0 | Control | ros→stm32 | 20B | 20Hz+1Hz | lx/ly/az/mode + ros_state（看门狗） |
+| `0x50` | Telemetry | STM32 → ROS | 55B（payload 51B） | 200 Hz | IMU 姿态 + 底盘状态 + 裁判系统全量 |
+| `0xA0` | Control | ROS → STM32 | 20B（payload 16B） | 20 Hz + 1 Hz 心跳 | lx/ly/az/mode + ros_state（刷新看门狗） |
 
-## 4. ROS 接口
+#### Telemetry 字段（STM32 → ROS，200 Hz）
+
+| 字段 | 类型 | 单位 | 说明 |
+|------|------|------|------|
+| gimbal_pitch / gimbal_yaw | float | rad | 云台 pitch / yaw |
+| chassis_pitch / chassis_yaw | float | rad | 车体 pitch / yaw |
+| mcu_timestamp_ms | uint16 | ms | MCU 时间戳低 16 位 |
+| current_hp | uint16 | hp | 本机当前血量 |
+| projectile_allowance_17mm | uint16 | count | 17mm 弹丸剩余发射次数 |
+| chassis_power | float | W | 底盘实时功率 |
+| chassis_mode | uint8 | — | 0=normal 1=spin_low 2=spin_high 3=estop |
+| game_progress | uint8 | — | 0=未开始 1=准备 2=自检 3=5s倒计时 4=比赛中 5=结算 |
+| stage_remain_time | uint16 | s | 当前阶段剩余时间 |
+| team_colour | uint8 | — | 1=红方 0=蓝方 |
+| rfid_base | uint8 | — | 己方基地增益点 RFID（1=触发） |
+| ally_1/2/3/4/7_robot_hp | uint16 | hp | 己方各机器人血量 |
+| ally_outpost_hp / ally_base_hp | uint16 | hp | 己方前哨站 / 基地血量 |
+| event_data | uint32 | — | 事件 bitfield（1=增益点激活，2=堡垒被占） |
+
+#### Control 字段（ROS → STM32，20 Hz）
+
+| 字段 | 类型 | 单位 | 说明 |
+|------|------|------|------|
+| lx | float | m/s | body 系前向线速度 |
+| ly | float | m/s | body 系侧向线速度 |
+| az | float | rad/s | 底盘角速度 / 自旋速度 |
+| mode | uint8 | — | 0=normal 1=spin_low 2=spin_high 3=estop |
+| ros_state | uint8 | — | 0=init 1=ready 2=running 3=fault |
+
+## ROS 接口
 
 | 话题 | 类型 | 方向 | 说明 |
 | :--- | :--- | :--- | :--- |
@@ -61,7 +88,7 @@ serial/serial_driver/
 | `referee/all_robot_hp` | rm_interfaces/msg/GameRobotHP | Publication | 己方单位 HP |
 | `referee/rfidStatus` | rm_interfaces/msg/RfidStatus | Publication | RFID 基地增益 |
 
-## 5. 参数配置
+## 参数
 
 参数定义于 `config/serial_driver.yaml`：
 
@@ -74,7 +101,7 @@ serial/serial_driver/
 | stop_bits | "1" | 停止位 |
 | enable_vel_log | false | 启用速度下发 CSV 日志（详见第 11 节） |
 
-## 6. 编译与使用
+## 编译与启动
 
 ### 编译
 ```bash
@@ -90,9 +117,9 @@ ros2 launch rm_serial_driver serial_driver.launch.py
 ```bash
 ros2 launch rm_serial_driver serial_driver.launch.py device_name:=/dev/ttyUSB0
 ```
-该节点已注册为 Composable Node，通常由主导航启动文件（如 `rm_navigation_reality_launch.py`）自动拉起。
+通常由 `rm_navigation_reality_launch.py` 作为 Composable Node 拉起，无需单独启动。
 
-## 7. 协议修改流程
+## 协议修改流程
 
 1. 修改 `protocol/protocol.yaml`（协议唯一真相源）。
 2. 执行生成脚本：
@@ -111,7 +138,7 @@ ros2 launch rm_serial_driver serial_driver.launch.py device_name:=/dev/ttyUSB0
 
 注意：`sentry_tools` 工具箱的 GUI 控件会根据 `protocol.py` 自动更新。
 
-## 8. 串口调试
+## 串口调试
 
 - **虚拟串口测试**：使用 socat 创建虚拟串口对进行闭环测试：
   ```bash
@@ -121,22 +148,22 @@ ros2 launch rm_serial_driver serial_driver.launch.py device_name:=/dev/ttyUSB0
 - **链路诊断**：使用 `sentry_toolbox.py` 的 "串口诊断" 选项卡监控实时通信质量与丢包率。
 - **常见问题**：若提示权限不足，请执行 `sudo chmod 666 /dev/ttyACM0` 或将当前用户加入 `dialout` 用户组。
 
-## 9. 电控端集成
+## 电控端集成
 
 电控端集成代码位于 `example/` 目录，提供了基于 FreeRTOS 和 USB CDC 的实现示例。
 - 详细集成说明请参考 `example/README.md`。
 - 关键适配点包括：裁判系统结构体命名对接、通信接口切换（USB CDC vs UART）以及发送频率宏定义。
 
-## 10. 注意事项
+## 注意事项
 
 - ROS 端与电控端的结构体必须保持严格的字节对齐，协议变更时两端必须同步更新。
 - CRC16 校验算法两端必须一致（采用查表法，初始值为 0xFFFF）。
-- `cmd_vel` 订阅的是绝对路径话题，接收的是经过 `fake_vel_transform` 转换后的最终速度（body 系并叠加了自旋速度）。
+- `/cmd_vel_chassis` 是绝对路径话题，接收的是经 `fake_vel_transform` 转换后的 body 系速度（含自旋叠加）。
 - 驱动具备自动重连机制，串口断开后会以 1s 为间隔尝试重新打开设备。
 - 本包特有的 CMake 配置将 C++ 标准设为 C++14（项目其他包通常使用 C++17）。
 - `package.xml` 中保留了部分历史遗留的未使用依赖（如 `auto_nav_interfaces`, `visualization_msgs` 等）。
 
-## 11. 速度日志
+## 速度日志
 
 用于调试速度毛刺、突变等问题。启用后在串口发送前记录每帧 `vel_x`, `vel_y`, `vel_w` 到 CSV 文件，便于离线波形分析。
 
@@ -182,7 +209,7 @@ df = pd.read_csv('/tmp/vel_log_xxx.csv')
 df['t'] = (df['timestamp_ns'] - df['timestamp_ns'].iloc[0]) / 1e9
 
 fig, axes = plt.subplots(3, 1, sharex=True, figsize=(12, 6))
-for i, col in enumerate(['vel_x', 'vel_y', 'vel_w']):
+for i, col in enumerate(['lx', 'ly', 'az']):
     axes[i].plot(df['t'], df[col], linewidth=0.5)
     axes[i].set_ylabel(col)
     axes[i].grid(True, alpha=0.3)

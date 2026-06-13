@@ -34,24 +34,29 @@ pip3 install -r src/sentry_tools/requirements.txt --user --break-system-packages
 
 ### 标签页 1：串口 Mock
 
-模拟电控向上位机发送协议包，用于脱离硬件调试。
+模拟 STM32 向上位机发送协议包，用于脱离硬件调试。
 
 **操作步骤：**
 
 1. 顶栏选择串口和波特率，点击 Connect
-2. 在 IMU/Status/HP 子页签调整字段值
+2. 在 Telemetry 0x50 子页签调整字段值
 3. 勾选 Enable 并设置发送周期
-4. 底部「接收显示」实时显示 ROS 回传的速度指令
+4. 底部「接收显示」实时显示 ROS 回传的 Control 包速度指令
 
-**发送的包：**
+**发送的包（v3.1 协议）：**
 
-| 标签页 | 帧头 | 默认周期 | 可调字段 |
+| 标签页 | 帧头 | 协议包 | 说明 |
 |---|---|---|---|
-| IMU | 0xA1 | 20ms | pitch, yaw（滑块 ±3.14） |
-| Status | 0xA2 | 100ms | 比赛阶段(下拉)、剩余时间、血量、弹量、红蓝队(单选)、RFID(勾选) |
-| HP | 0xA3 | 500ms | 7 个己方血量（1/2/3/4/7号 + 前哨 + 基地） |
+| Telemetry 0x50 | 0x50 | `TelemetryPacket` | 200Hz，涵盖 IMU 姿态、底盘状态、裁判系统全量字段 |
 
-**控件是动态生成的**——修改 `protocol.yaml` 并重新生成后，新字段会自动出现。
+Telemetry 0x50 子页签包含所有字段的控件（控件从 `protocol.py` 动态生成）：
+- pitch/yaw/chassis_pitch/yaw 滑块（±3.14 rad）
+- game_progress 下拉、team_colour 单选
+- rfid_base 勾选框
+- current_hp / projectile_allowance_17mm / ally_*_hp 数值框
+- chassis_mode 下拉（0=normal 1=spin_low 2=spin_high 3=estop）
+
+**控件动态生成：** 修改 `protocol.yaml` 并重新运行 `generate.py` 后，新字段会自动出现，无需改代码。
 
 **虚拟串口联调：**
 

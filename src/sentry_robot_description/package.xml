@@ -2,10 +2,11 @@
 <package format="2">
 	<name>sentry_robot_description</name>
 	<version>1.0.0</version>
-	<description>sentry_robot_description</description>
+	<description>SDF/XMacro robot description for RoboMaster 2026 sentry (Mecanum omni chassis + Mid360 + gimbal), with MecanumDrive2 Gazebo plugin.</description>
 
-	<maintainer email="lihanchen2004@163.com">Lihan Chen</maintainer>
-	<license>MIT</license>
+	<maintainer email="2218681402@qq.com">boombroke</maintainer>
+	<license>Apache-2.0</license>
+	<author email="2218681402@qq.com">boombroke</author>
 
 	<buildtool_depend>ament_cmake</buildtool_depend>
 

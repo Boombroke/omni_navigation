@@ -1,10 +1,90 @@
 # nav2_plugins
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Build and Test](https://github.com/SMBU-PolarBear-Robotics-Team/nav2_plugins/actions/workflows/ci.yml/badge.svg)](https://github.com/SMBU-PolarBear-Robotics-Team/nav2_plugins/actions/workflows/ci.yml)
-[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit)](https://github.com/pre-commit/pre-commit)
 
-![PolarBear Logo](https://raw.githubusercontent.com/SMBU-PolarBear-Robotics-Team/.github/main/.docs/image/polarbear_logo_text.png)
+## 简介
+
+`nav2_plugins` 为 Nav2 框架提供两个自定义插件：基于点云 intensity 的体素代价地图层 `IntensityVoxelLayer`，以及后退到自由空间的恢复行为 `BackUpFreeSpace`。两者均配合 `terrain_analysis` 使用。
+
+## 插件列表
+
+### 1. IntensityVoxelLayer
+
+**插件类名**：`nav2_costmap_2d_plugins::IntensityVoxelLayer`
+**基类**：`nav2_costmap_2d::Layer`
+
+基于 VoxelLayer 的扩展，增加 `min_obstacle_intensity` / `max_obstacle_intensity` 两个阈值参数，只将 intensity 落在该范围内的点标记为障碍。配合 `terrain_analysis` 发出的 `/terrain_map`（含 intensity 地形信息），可区分可通行坡道与真实障碍，避免地形噪声污染代价图。
+
+**配置示例**（costmap 参数）：
+
+```yaml
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      plugins: ["static_layer", "intensity_voxel_layer", "inflation_layer"]
+      intensity_voxel_layer:
+        plugin: "nav2_costmap_2d_plugins::IntensityVoxelLayer"
+        enabled: true
+        track_unknown_space: true
+        footprint_clearing_enabled: true
+        publish_voxel_map: false
+        combination_method: 1
+        mark_threshold: 0
+        origin_z: 0.0
+        z_resolution: 0.05
+        z_voxels: 16
+        min_obstacle_height: 0.0
+        max_obstacle_height: 2.0
+        min_obstacle_intensity: 0.1   # intensity 低于此值不标记
+        max_obstacle_intensity: 2.0   # intensity 高于此值不标记
+        observation_sources: terrain_map
+        terrain_map:
+          data_type: PointCloud2
+          topic: /terrain_map
+          obstacle_max_range: 5.0
+          obstacle_min_range: 0.2
+```
+
+其余参数与 Nav2 标准 [VoxelLayer](https://docs.nav2.org/configuration/packages/costmap-plugins/voxel.html) 相同。`min_obstacle_intensity` / `max_obstacle_intensity` 配置在 `intensity_voxel_layer` 层级下，而非 `observation_sources` 下。
+
+---
+
+### 2. BackUpFreeSpace
+
+**插件类名**：`nav2_behaviors_plugins::BackUpFreeSpace`
+**基类**：`nav2_core::Behavior`
+
+机器人卡住时，通过查询代价图（`get_costmap` 服务）在周围动态搜索自由空间，计算最近可用位置后后退过去。搜索半径从 `robot_radius` 开始逐步扩大到 `max_radius`，直到找到满足 `free_threshold` 条件的点。
+
+**参数**：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `robot_radius` | double | `0.1` | 机器人半径（m），用于确定搜索范围起始半径 |
+| `max_radius` | double | `1.0` | 最大搜索半径（m） |
+| `service_name` | string | `local_costmap/get_costmap` | 代价图查询服务名称 |
+| `free_threshold` | int | `5` | 判定为自由空间的最小连续空闲格数 |
+| `visualize` | bool | `false` | 是否在 RViz 中发布自由空间与目标位置标记 |
+
+**配置示例**（behavior_server 参数）：
+
+```yaml
+behavior_server:
+  ros__parameters:
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    backup:
+      plugin: "nav2_behaviors_plugins/BackUpFreeSpace"
+    robot_base_frame: gimbal_yaw_fake
+    robot_radius: 0.2
+    max_radius: 3.5
+    service_name: "global_costmap/get_costmap"
+    free_threshold: 5
+    visualize: true
+```
+
+## 致谢
+
+部分代码参考 [@PolarisXQ SCURM_SentryNavigation](https://github.com/PolarisXQ/SCURM_SentryNavigation) 与 [@ros-navigation navigation2](https://github.com/ros-navigation)。
 
 ## 1. Overview
 

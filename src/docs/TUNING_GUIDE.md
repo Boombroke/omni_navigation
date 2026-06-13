@@ -229,7 +229,33 @@ ps aux | grep point_lio | awk '{print $6/1024 "MB"}'
 
 ## 四、LiDAR 频率与时间同步
 
-### 11. publish_freq（实车 LiDAR 发布频率）
+### 11. timestamp_unit（时间戳单位）
+
+> **仿真专属坑，必须正确设置。**
+
+**当前值**：仿真 `0`（秒），实车 `3`（纳秒）
+
+**背景**：`ign_sim_pointcloud_tool` 将 Gazebo 的 `PointCloudPacked` 转换为 `PointCloud2` 时，写入的每点时间戳（`t` 字段）单位是**秒**。Point-LIO 根据 `timestamp_unit` 参数解释该字段：
+
+| `timestamp_unit` 值 | 含义 |
+|---|---|
+| `0` | 秒（仿真配置） |
+| `1` | 毫秒 |
+| `2` | 微秒 |
+| `3` | 纳秒（实车 Livox 配置） |
+
+若仿真中配置错误（如设为 `2` 或 `3`），Point-LIO 会将秒级时间戳解释为微秒或纳秒，计算出荒谬的时间差，导致里程计立即发散并持续报 `lidar loop back, clear buffer`。
+
+**确认方式**：
+```bash
+# 确认仿真 nav2_params.yaml 中 point_lio 段落里：
+grep "timestamp_unit" src/sentry_nav_bringup/config/simulation/nav2_params.yaml
+# 应输出: timestamp_unit: 0
+```
+
+---
+
+### 12. publish_freq（实车 LiDAR 发布频率）
 
 **当前值**：30Hz
 
@@ -249,7 +275,7 @@ ps aux | grep point_lio | awk '{print $6/1024 "MB"}'
 
 ## 五、GICP 重定位
 
-### 12. accumulated_count_threshold（初始定位累积帧数）
+### 13. accumulated_count_threshold（初始定位累积帧数）
 
 **当前值**：20
 
@@ -266,7 +292,7 @@ grep "GICP" /tmp/nav_log.txt
 
 ---
 
-### 13. registered_leaf_size / global_leaf_size（GICP 降采样分辨率）
+### 14. registered_leaf_size / global_leaf_size（GICP 降采样分辨率）
 
 **当前值**：0.1 / 0.2
 
@@ -287,22 +313,22 @@ grep "GICP" /tmp/nav_log.txt
 
 velocity_smoother 是 Nav2 官方节点，位于 controller_server 和 fake_vel_transform 之间，负责限制加速度和最大速度，防止指令突变。
 
-### 14. smoothing_frequency（平滑器频率）
+### 15. smoothing_frequency（平滑器频率）
 
-**当前值**：仿真 20Hz，实车 40Hz
+**当前值**：仿真 20Hz，实车 30Hz
 
 **核心原则**：必须与 `controller_frequency` 一致，否则高频端指令被丢弃。
 
 | 环境 | controller_frequency | smoothing_frequency | 状态 |
 |---|---|---|---|
 | 仿真 | 20 | 20 | ✅ 匹配 |
-| 实车 | 40 | 40 | ✅ 匹配 |
+| 实车 | 30 | 30 | ✅ 匹配 |
 
 **判断标准**：
 - `ros2 topic hz cmd_vel_nav2_result` 应接近 `smoothing_frequency`
 - 如果明显低于设定值 → CPU 不足，降低频率
 
-### 15. feedback 模式
+### 16. feedback 模式
 
 **当前值**：`OPEN_LOOP`
 
@@ -325,9 +351,9 @@ python3 src/sentry_tools/serial_visualizer.py
 - 实际速度明显滞后或超调 → 切 `CLOSED_LOOP`
 - `CLOSED_LOOP` 依赖 odometry 质量，如果里程计有噪声反而可能引入抖动
 
-### 16. max_accel / max_decel（加速度限制）
+### 17. max_accel / max_decel（加速度限制）
 
-**当前值**：`[4.5, 4.5, 5.0]` / `[-4.5, -4.5, -5.0]`
+**当前值**：仿真 `[4.5, 4.5, 5.0]` / `[-4.5, -4.5, -5.0]`；实车 `[3.0, 3.0, 5.0]` / `[-3.0, -3.0, -5.0]`
 
 **调优范围**：1.0 ~ 6.0 m/s²
 
@@ -351,13 +377,13 @@ python3 src/sentry_tools/serial_visualizer.py
 - 仿真摩擦力限制 ≈ 0.2g ≈ 2.0 m/s²，当前 4.5 超过物理极限（仿真中 smoother 无实际意义）
 - 实车需实测：全速加速时观察轮子是否打滑
 
-### 17. max_velocity（最大速度限制）
+### 18. max_velocity（最大速度限制）
 
-**当前值**：`[2.5, 2.5, 3.0]`
+**当前值**：仿真 `[2.5, 2.5, 3.0]`，实车 `[1.5, 1.5, 3.0]`
 
-应与 controller 的 `v_linear_max` / `v_angular_max` 一致或略大。如果 smoother 限速比 controller 小，controller 的指令会被截断。
+应与 controller 的 `v_linear_max` / `v_angular_max` 一致或略大。如果 smoother 限速比 controller 小，controller 的指令会被截断。实车线速度上限 1.5 m/s 比仿真更保守，防止过快加速导致打滑。
 
-### 18. deadband_velocity（死区）
+### 19. deadband_velocity（死区）
 
 **当前值**：`[0.0, 0.0, 0.0]`
 

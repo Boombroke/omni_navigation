@@ -1,88 +1,65 @@
 # sentry_robot_description
 
-![PolarBear Logo](https://raw.githubusercontent.com/SMBU-PolarBear-Robotics-Team/.github/main/.docs/image/polarbear_logo_text.png)
+哨兵机器人 SDF/XMacro 描述包，适配 RoboMaster 2026 全向麦轮主线。描述文件由 [xmacro](https://github.com/gezp/xmacro) 格式编写，通过 Python API 在 launch 文件中动态生成 SDF / URDF，供 Gazebo 仿真与 `robot_state_publisher` 使用。
 
-SMBU PolarBear Team robot description package, ported to RoboMaster 2026 omni mainline by Boombroke.
+## 文件结构
 
-深圳北理莫斯科大学北极熊战队基础描述包，**Sentry26 omni 主线** 通用机器人关节描述。
-
-## 1. Overview
-
-本功能包含深圳北理莫斯科大学北极熊战队用于 RoboMaster 赛事的机器人关节描述文件。它将读取机器人描述文件并转换为 TF 和 joint_states ，以便与其他 ROS2 节点配合使用。
-
-本项目使用 [xmacro](https://github.com/gezp/xmacro) 格式描述机器人关节信息，可以更灵活的组合已有模型。
-
-当前机器人描述文件基于 [rmua19_standard_robot](https://github.com/robomaster-oss/rmoss_gz_resources/tree/humble/resource/models/rmua19_standard_robot) 进行二次编辑，加入了工业相机和激光雷达等传感器。
-
-- [simulation_robot](./resource/xmacro/simulation_robot.sdf.xmacro)
-
-    搭载云台相机 industrial_camera 和激光雷达 rplidar_a2 和 Livox mid360，其中相机与 gimbal_pitch 轴固连，mid360 水平安装（实车固连 gimbal_yaw，仿真固连 chassis）。
-
-    ![sentry](https://raw.githubusercontent.com/LihanChen2004/picx-images-hosting/master/sentry_description.1sf3yc69kr.webp)
-
-    ![frames](https://raw.githubusercontent.com/LihanChen2004/picx-images-hosting/master/frames.5xaq4wriyy.webp)
-
-## 2. Quick Start
-
-### 2.1 Setup Environment
-
-- Ubuntu 24.04
-- ROS: [Jazzy](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html)
-- 当前活跃模型：`sentry_robot.sdf.xmacro`（含 `MecanumDrive2` Gazebo 插件，omni 全向底盘）
-
-### 2.2 Create Workspace
-
-```bash
-sudo apt install git-lfs
-pip install vcstool2
+```
+sentry_robot_description/
+├── resource/
+│   ├── models/                    # 引用的外部模型（mid360/camera/rplidar）
+│   └── xmacro/
+│       ├── sentry_robot.sdf.xmacro       # 实车模型（当前活跃）
+│       ├── simulation_robot.sdf.xmacro   # 仿真模型
+│       └── infantry_robot.sdf.xmacro     # 步兵模型
+├── launch/
+│   └── robot_description_launch.py
+├── params/robot_description.yaml
+└── rviz/visualize_robot.rviz
 ```
 
-```bash
-mkdir -p ~/ros_ws
-cd ~/ros_ws
-```
+## 模型说明
 
-```bash
-git clone https://github.com/SMBU-PolarBear-Robotics-Team/sentry_robot_description.git
-```
+### sentry_robot.sdf.xmacro（实车，当前活跃）
 
-```bash
-vcs import --recursive < dependencies.repos
-```
+基于 `rm25_example_robot` 底盘，搭载：
 
-```bash
-pip install xmacro
-```
+| 传感器 / 组件 | 挂载点 | 参数 |
+|---|---|---|
+| Livox Mid360 (`front_` 前缀) | `gimbal_yaw` | 50 Hz，1875 samples，安装偏移 `-0.15 0 0.15`，朝向 `π`（向后） |
+| 工业相机 `industrial_camera` | `gimbal_pitch` | 30 Hz，1920×1080，FOV 1 rad |
 
-### 2.3 Build
+Gazebo 插件：
 
-```bash
-rosdep install -r --from-paths src --ignore-src --rosdistro $ROS_DISTRO -y
-```
+| 插件 | 说明 |
+|---|---|
+| `MecanumDrive2` | 全向麦轮底盘，控制 front/rear left/right 四个车轮关节 |
+| `JointController` × 2 | gimbal_yaw（P=0.2，I=0.01）和 gimbal_pitch（P=1，I=0.01）速度控制 |
+| `JointStatePublisher` | 关节状态发布 |
+| `LightBarController` | 装甲板灯条颜色控制 |
+| `ProjectileShooter` | 17mm 弹丸射击（初速 20 m/s） |
 
-```bash
-colcon build --symlink-install
-```
+### simulation_robot.sdf.xmacro（仿真）
 
-### 2.4 Running
+与实车模型结构相同，差异在传感器挂载点和参数上：
 
-#### Option1: 在 RViz 中可视化机器人
+| 传感器 | 挂载点 | 差异 |
+|---|---|---|
+| RPLidar A2 | `chassis` | 10 Hz，400 samples（仅仿真） |
+| Livox Mid360 | `chassis` | 20 Hz，1200 samples（仿真固连底盘而非云台） |
+| 工业相机 | `gimbal_pitch` | 5 Hz，640×480 |
 
-```bash
-ros2 launch sentry_robot_description robot_description_launch.py
-```
+两个模型的底盘高度、云台 yaw 高度等几何参数也有差异：
 
-#### Option2: Python API
+| 参数 | 实车 | 仿真 |
+|---|---|---|
+| `chassis_height` | 0.107 m | 0.076 m |
+| `gimbal_yaw_height` | 0.026 m | 0.1376 m |
+| `gimbal_pitch_height` | 0.355 m | 0.16 m |
 
-通过 Python API，在 launch file 中解析 XMacro 文件，生成 URDF 和 SDF 文件 (Recommend)：
+## URDF / SDF 生成
 
-> [!TIP]
->
-> [robot_state_publisher](https://github.com/ros/robot_state_publisher) 需要传入 urdf 格式的机器人描述文件
->
-> Gazebo 仿真器 spawn robot 时，需要传入 sdf / urdf 格式的机器人描述文件
-
-感谢前辈的开源工具 [xmacro](https://github.com/gezp/xmacro) 和 [sdformat_tools](https://github.com/gezp/sdformat_tools) ，这里简述 XMacro 转 URDF 和 SDF 的示例，用于在 launch file 中生成 URDF 和 SDF 文件。
+### 在 launch 文件中生成（推荐）
 
 ```python
 from xmacro.xmacro4sdf import XMLMacro4sdf
@@ -91,76 +68,51 @@ from sdformat_tools.urdf_generator import UrdfGenerator
 xmacro = XMLMacro4sdf()
 xmacro.set_xml_file(robot_xmacro_path)
 
-# Generate SDF from xmacro
+# 生成 SDF
 xmacro.generate()
-robot_xml = xmacro.to_string()
+robot_sdf = xmacro.to_string()
 
-# Generate URDF from SDF
+# 从 SDF 转 URDF（供 robot_state_publisher 使用）
 urdf_generator = UrdfGenerator()
-urdf_generator.parse_from_sdf_string(robot_xml)
-robot_urdf_xml = urdf_generator.to_string()
+urdf_generator.parse_from_sdf_string(robot_sdf)
+robot_urdf = urdf_generator.to_string()
 ```
 
-#### Option3: 命令行
-
-通过命令行直接转换输出 SDF 文件（Not Recommend）:
+### 命令行
 
 ```bash
 source install/setup.bash
-
-xmacro4sdf src/sentry_robot_description/resource/xmacro/simulation_robot.sdf.xmacro > src/sentry_robot_description/resource/xmacro/simulation_robot.sdf
+xmacro4sdf src/sentry_robot_description/resource/xmacro/sentry_robot.sdf.xmacro > /tmp/sentry_robot.sdf
 ```
 
-## 3. Subscribed Topics
+### 在 RViz 中可视化
 
-None.
+```bash
+ros2 launch sentry_robot_description robot_description_launch.py
+```
 
-## 4. Published Topics
+## Launch 参数
 
-- `robot_description (std_msgs/msg/String)`
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `robot_name` | `simulation_robot` | XMacro 文件名（无后缀），从 `resource/xmacro/` 加载 |
+| `robot_xmacro_file` | — | XMacro 文件绝对路径（优先级高于 `robot_name`） |
+| `use_sim_time` | `False` | 是否使用仿真时间 |
+| `use_rviz` | `True` | 是否启动 RViz |
+| `params_file` | `params/robot_description.yaml` | 参数文件路径 |
 
-    机器人描述文件（字符串形式）。
+## 发布话题
 
-- `joint_states (sensor_msgs/msg/JointState)`
+| 话题 | 类型 | 说明 |
+|------|------|------|
+| `robot_description` | `std_msgs/String` | 机器人描述（字符串） |
+| `joint_states` | `sensor_msgs/JointState` | 关节状态 |
+| `tf` / `tf_static` | `tf2_msgs/TFMessage` | 关节坐标系 TF |
 
-    如果命令行中未给出 URDF，则此节点将侦听 `robot_description` 话题以获取要发布的 URDF。一旦收到一次，该节点将开始将关节状态发布到 `joint_states` 话题。
+## 环境依赖
 
-- `any_topic (sensor_msgs/msg/JointState)`
+```bash
+pip install xmacro
+sudo apt install ros-jazzy-sdformat-tools  # 或 pip install sdformat_tools
+```
 
-    如果 `sources_list` 参数不为空（请参阅下面的参数），则将订阅此参数中的每个命名话题以进行联合状态更新。不要将默认的 `joint_states` 话题添加到此列表中，因为它最终会陷入无限循环。
-
-- `tf, tf_static (tf2_msgs/msg/TFMessage)`
-
-    机器人关节坐标系信息。
-
-## 5. Launch Arguments
-
-- `use_sim_time` (bool, default: False)
-
-    是否使用仿真时间。
-
-- `robot_name` (str, default: "simulation_robot")
-
-    机器人 XMacro 描述文件的**名字（无需后缀）**。描述文件应位于 `package://sentry_robot_description/resource/xmacro` 目录下。
-
-- `robot_xmacro_file` (str, default: "[simulation_robot.sdf.xmacro](./resource/xmacro/simulation_robot.sdf.xmacro)")
-
-    机器人 XMacro 描述文件的**绝对路径**。本参数的优先级高于 `robot_name`，即若设置了 `robot_xmacro_file`，则 `robot_name` 参数无效。若未设置 `robot_xmacro_file`，则使用 `robot_name` 参数并自动补全路径作为 `robot_xmacro_file` 的值。
-
-- `params_file` (str, default: [robot_description.yaml](./params/robot_description.yaml))
-
-- `rviz_config_file` (str, default: [visualize_robot.rviz](./rviz/visualize_robot.rviz))
-
-    RViz 配置文件路径。
-
-- `use_rviz` (bool, default: True)
-
-    是否启动 RViz 可视化界面。
-
-- `use_respawn` (bool, default: False)
-
-    是否在节点退出时尝试重启节点。
-
-- `log_level` (str, default: "info")
-
-    日志级别。

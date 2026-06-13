@@ -1,31 +1,58 @@
 # fake_vel_transform
 
-本功能包启动时，Fake Velocity Transform 会创建一个 `fake_robot_base_frame` 的坐标系，其 x, y, z 与 `robot_base_frame` 的坐标系一致，但 yaw 固定指向正前方，然后将生成的该坐标系发布到 tf2。同时，Fake Velocity Transform 会订阅 `input_cmd_vel_topic` 话题，将接收到的速度指令转换到 `robot_base_frame` 坐标系下，并发布到 `output_cmd_vel_topic` 话题。
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-主要目的是用于适配 NAV2 局部路径规划器，当速度参考坐标系 `robot_base_frame` 变化剧烈时，如云台处于自旋扫描时，NAV2 局部路径规划器会将机器人的方向视为与当前路径规划方向一致，导致机器人无法正常运动。而使用 `fake_robot_base_frame` 可以规避这个问题，实现较稳定的轨迹跟踪效果。
+## 简介
 
-由于 NAV2 humble 发行版出于避免破坏原有接口的原因，依然使用 Twist 类型（不含时间戳），humble 往后的版本才使用 TwistStamped，导致无法直接实现 cmd_vel 与 odometry 的时间戳对齐。因此，本功能包暂时订阅 local_plan 话题（由局部路径规划器发布），以获取时间戳，将它的时间戳视为 cmd_vel 的时间戳，以间接实现时间戳对齐。
-Related issue: [Switch from Twist to TwistStamped for cmd_vel #1594](https://github.com/ros-navigation/navigation2/issues/1594)
+`fake_vel_transform` 解决底盘持续自旋时 Nav2 局部规划器的速度参考系漂移问题。
 
-## Published Topics
+Nav2 以 `robot_base_frame`（`gimbal_yaw`）为速度参考系。底盘持续自旋时，`gimbal_yaw` 随底盘连续旋转，Nav2 会误判机器人朝向，导致轨迹跟踪失稳。本节点引入 `fake_robot_base_frame`（`gimbal_yaw_fake`），其 yaw 始终反向抵消 `robot_base_frame` 的实时旋转角，使 Nav2 看到的虚拟坐标系在惯性系下保持朝向稳定。
 
-* `tf` (`tf2_msgs/msg/TFMessage`) - 与机器人可移动关节相对应的变换
-* `output_cmd_vel_topic` (`geometry_msgs/msg/Twist`) - 转换后的速度指令
+速度指令处理流程：
+1. 订阅 `input_cmd_vel_topic`（`TwistStamped`，Nav2 输出，基于 `gimbal_yaw_fake` 系）
+2. 从 `odom_topic` 读取当前 `robot_base_frame` 的 yaw 角
+3. 将线速度从 `gimbal_yaw_fake` 系旋转到 `gimbal_yaw` 系（2D 旋转矩阵）
+4. angular.z 叠加 `spin_speed`（底盘自旋速度）
+5. 发布 `output_cmd_vel_topic`（`Twist`）给底盘驱动
 
-## Subscribed Topics
+TF 广播以 50ms 周期（20 Hz）持续更新 `robot_base_frame` → `fake_robot_base_frame` 变换，旋转角为当前 `robot_base_frame` yaw 的相反数，保证虚拟系在惯性系下朝向固定。
 
-* `input_cmd_vel_topic` (`geometry_msgs/msg/Twist`) - 机器人的速度指令
-* `local_plan_topic` (`nav_msgs/msg/Path`) - 局部路径规划器的路径
-* `odom_topic` (`nav_msgs/msg/Odometry`) - 里程计数据
-* `cmd_spin_topic` (`example_interfaces/msg/Float32`) - 控制底盘固定旋转速度，将会叠加到 `output_cmd_vel_topic` 中
+## 订阅话题
 
-## Parameters
+| 话题 | 类型 | 说明 |
+|------|------|------|
+| `input_cmd_vel_topic` | `geometry_msgs/msg/TwistStamped` | Nav2 输出速度指令（`fake_robot_base_frame` 系） |
+| `odom_topic` | `nav_msgs/msg/Odometry` | 里程计，用于提取当前 yaw 角，默认 `odom` |
+| `cmd_spin_topic` | `example_interfaces/msg/Float32` | 动态更新底盘自旋速度，默认 `cmd_spin` |
 
-* `odom_topic` (`string`, default: "odom") - 里程计话题。里程计的 frame_id 与 `robot_base_frame` 参数保持一致
-* `robot_base_frame` (`string`, default: "gimbal_link") - 速度参考坐标系
-* `fake_robot_base_frame` (`string`, default: "gimbal_link_fake") - 伪速度参考坐标系
-* `local_plan_topic` (`string`, default: "local_plan") - 局部路径规划器的路径话题
-* `cmd_spin_topic` (`string`, default: "cmd_spin") - 控制底盘固定旋转速度的话题
-* `input_cmd_vel_topic` (`string`, default: "") - 输入速度指令的话题
-* `output_cmd_vel_topic` (`string`, default: "") - 输出速度指令的话题。将原本基于 `fake_robot_base_frame` 的速度变换到 `robot_base_frame` 后发布
-* `init_spin_speed` (`double`, default: 0.0) - 若没有接收 `cmd_spin_topic`，则使用该值作为固定旋转速度
+## 发布话题
+
+| 话题 | 类型 | 说明 |
+|------|------|------|
+| `output_cmd_vel_topic` | `geometry_msgs/msg/Twist` | 变换并叠加自旋后的底盘速度指令 |
+
+## TF 广播
+
+`robot_base_frame` → `fake_robot_base_frame`，旋转量 = −current_yaw，20 Hz 持续更新
+
+## 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `robot_base_frame` | string | `gimbal_yaw` | 真实底盘/云台坐标系 |
+| `fake_robot_base_frame` | string | `gimbal_yaw_fake` | 虚拟惯性参考系（Nav2 规划用） |
+| `odom_topic` | string | `odom` | 里程计话题，用于读取实时 yaw |
+| `cmd_spin_topic` | string | `cmd_spin` | 底盘自旋速度覆写话题 |
+| `input_cmd_vel_topic` | string | `""` | 输入速度话题（需在 launch 中赋值） |
+| `output_cmd_vel_topic` | string | `""` | 输出速度话题（需在 launch 中赋值） |
+| `init_spin_speed` | float | `0.0` | 未收到 `cmd_spin_topic` 时的初始自旋速度（rad/s） |
+
+## 速度变换公式
+
+```
+vx_out =  vx_in * cos(yaw) + vy_in * sin(yaw)
+vy_out = -vx_in * sin(yaw) + vy_in * cos(yaw)
+wz_out =  wz_in + spin_speed
+```
+
+其中 `yaw` 为当前 `robot_base_frame` 相对 `odom` 的偏航角。

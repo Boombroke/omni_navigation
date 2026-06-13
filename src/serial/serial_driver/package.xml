@@ -5,12 +5,10 @@
 <package format="3">
   <name>rm_serial_driver</name>
   <version>0.1.0</version>
-  <description>A template for ROS packages.</description>
-  <maintainer email="chen.junn@outlook.com">Chen Jun</maintainer>
-  <license>MIT</license>
-  <url type="website">https://github.com/chenjunnn/ros2_mindvision_camera</url>
-  <url type="bugtracker">https://github.com/chenjunnn/ros2_mindvision_camera/issues</url>
-  <author email="chen.junn@outlook.com">Chen Jun</author>
+  <description>ROS2 serial driver bridging Nav2 and STM32 via protocol v3.1; subscribes /cmd_vel_chassis and publishes referee/gimbal/chassis topics.</description>
+  <maintainer email="2218681402@qq.com">boombroke</maintainer>
+  <license>Apache-2.0</license>
+  <author email="2218681402@qq.com">boombroke</author>
 
   <!-- buildtool_depend: dependencies of the build process -->
   <buildtool_depend>ament_cmake</buildtool_depend>
