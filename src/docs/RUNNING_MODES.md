@@ -8,18 +8,15 @@
 ## 目录
 
 - [1. 运行模式总览](#1-运行模式总览)
-- [2. 仿真导航模式](#2-仿真导航模式)
-- [3. 实车导航模式](#3-实车导航模式)
-- [4. SLAM 建图模式](#4-slam-建图模式)
-- [5. 行为树决策系统](#5-行为树决策系统)
-- [6. 多机器人仿真](#6-多机器人仿真)
-- [7. 辅助工具](#7-辅助工具)
-- [8. Nav2 导航参数详解](#8-nav2-导航参数详解)
-- [9. 定位模块参数详解](#9-定位模块参数详解)
-- [10. 地形分析参数详解](#10-地形分析参数详解)
-- [11. 串口通信参数](#11-串口通信参数)
-- [12. 仿真与实车关键参数差异对照](#12-仿真与实车关键参数差异对照)
-- [13. 常见调参场景](#13-常见调参场景)
+- [2. 实车导航模式](#2-实车导航模式)
+- [3. SLAM 建图模式](#3-slam-建图模式)
+- [4. 行为树决策系统](#4-行为树决策系统)
+- [5. 辅助工具](#5-辅助工具)
+- [6. Nav2 导航参数详解](#6-nav2-导航参数详解)
+- [7. 定位模块参数详解](#7-定位模块参数详解)
+- [8. 地形分析参数详解](#8-地形分析参数详解)
+- [9. 串口通信参数](#9-串口通信参数)
+- [10. 常见调参场景](#10-常见调参场景)
 
 ---
 
@@ -29,28 +26,14 @@
 
 | 模式 | 启动文件 | 核心参数 | 用途 |
 |:---|:---|:---|:---|
-| 仿真导航 | `rm_navigation_simulation_launch.py` | `slam:=False` | Gazebo 仿真环境中的自主导航 |
-| 仿真建图 | `rm_navigation_simulation_launch.py` | `slam:=True` | 在仿真中构建 2D 栅格地图和保存 PCD |
 | 实车导航 | `rm_navigation_reality_launch.py` | `slam:=False` | 物理机器人的自主导航 |
 | 实车建图 | `rm_navigation_reality_launch.py` | `slam:=True` | 物理机器人构建地图 |
 | 行为树决策 | `sentry_behavior_launch.py` | `target_tree` | 比赛战术逻辑（独立启动） |
-| 多机器人仿真 | `rm_multi_navigation_simulation_launch.py` | `robots` | 多机同场景仿真（实验性） |
 | 手柄遥控 | 内嵌于导航 launch | 默认开启 | PS4 手柄控制 |
 
 ### Launch 层级关系
 
 ```
-仿真模式:
-  bringup_sim.launch.py (Gazebo 仿真器)
-  └── rm_navigation_simulation_launch.py
-      ├── ign_sim_pointcloud_tool (仿真专用点云格式转换)
-      ├── bringup_launch.py
-      │   ├── [slam=True]  → slam_launch.py
-      │   ├── [slam=False] → localization_launch.py
-      │   └── navigation_launch.py (始终启动)
-      ├── joy_teleop_launch.py (手柄控制)
-      └── rviz_launch.py (可视化，可选)
-
 实车模式:
   rm_navigation_reality_launch.py
   ├── livox_ros_driver2 (实车激光雷达驱动)
@@ -92,68 +75,7 @@ omni_pid_pursuit_controller (局部控制)
 
 ---
 
-## 2. 仿真导航模式
-
-### 前置条件
-- Gazebo Harmonic 已安装
-- 项目已编译且 `source install/setup.bash`
-- 先验点云文件 (PCD) 已放置在 `sentry_nav_bringup/pcd/simulation/` 目录
-
-### 启动步骤
-
-**第 1 步：启动 Gazebo 仿真器（必须先启动）**
-
-```bash
-# Wayland 桌面环境必须设置 QT_QPA_PLATFORM=xcb（可选 headless:=true 无 GUI）
-QT_QPA_PLATFORM=xcb ros2 launch rmu_gazebo_simulator bringup_sim.launch.py
-```
-
-**第 2 步：Unpause Gazebo 仿真**
-
-等待机器人 spawn 完成后，点击 Play 按钮或使用命令行 unpause：
-```bash
-gz service -s /world/default/control \
-  --reqtype gz.msgs.WorldControl \
-  --reptype gz.msgs.Boolean \
-  --timeout 5000 \
-  --req 'pause: false'
-```
-
-**第 3 步：等待 ~10 秒后启动导航**
-
-> **重要**：必须等待仿真时钟稳定后再启动导航栈。否则 Point-LIO 会因时间戳异常导致 TF 不同步。
-
-```bash
-# 导航模式（使用已有地图）
-ros2 launch sentry_nav_bringup rm_navigation_simulation_launch.py world:=rmul_2026 slam:=False
-
-# 建图模式
-ros2 launch sentry_nav_bringup rm_navigation_simulation_launch.py world:=rmul_2026 slam:=True
-```
-
-### 完整参数列表
-
-| 参数 | 类型 | 默认值 | 说明 |
-|:---|:---|:---|:---|
-| `namespace` | string | `red_standard_robot1` | 机器人命名空间，多机模式下区分不同机器人 |
-| `slam` | bool | `False` | `True`=SLAM 建图模式，`False`=导航模式（使用先验地图定位） |
-| `world` | string | `rmuc_2025` | 仿真世界名。可选：`rmuc_2025`, `rmuc_2026`, `rmul_2026` |
-| `map` | string | 自动推导 | 2D 栅格地图路径，默认 `map/simulation/{world}.yaml` |
-| `prior_pcd_file` | string | 自动推导 | 先验 PCD 文件路径，默认 `pcd/simulation/{world}.pcd` |
-| `use_sim_time` | bool | `True` | 使用 Gazebo 仿真时钟 |
-| `params_file` | string | `config/simulation/nav2_params.yaml` | Nav2 参数配置文件 |
-| `autostart` | bool | `true` | 自动启动 Nav2 生命周期节点 |
-| `use_composition` | bool | `True` | 使用组合节点（共享进程，降低通信开销） |
-| `use_respawn` | bool | `False` | 节点崩溃后是否自动重启 |
-| `use_rviz` | bool | `True` | 是否启动 RViz 可视化 |
-| `rviz_config_file` | string | `rviz/nav2_default_view.rviz` | RViz 配置文件路径 |
-
-### 仿真专有节点
-- **ign_sim_pointcloud_tool**: 将 Gazebo 的 `PointCloudPacked` 格式转换为标准 `PointCloud2`（`velodyne_points` 话题），供 Point-LIO 处理。仅仿真模式启动。
-
----
-
-## 3. 实车导航模式
+## 2. 实车导航模式
 
 ### 前置条件
 - Livox MID360 激光雷达已连接并配置网络（默认 LiDAR IP: `192.168.1.150`，主机 IP: `192.168.1.50`）
@@ -180,21 +102,21 @@ ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py \
 
 ### 完整参数列表
 
-| 参数 | 类型 | 默认值 | 与仿真的区别 |
+| 参数 | 类型 | 默认值 | 说明 |
 |:---|:---|:---|:---|
-| `namespace` | string | `""` (空) | 仿真默认 `red_standard_robot1` |
-| `slam` | bool | `False` | 同仿真 |
-| `world` | string | `rmul_2026` | 仿真默认 `rmuc_2025` |
-| `map` | string | `map/reality/{world}.yaml` | 使用 reality 子目录 |
-| `prior_pcd_file` | string | `pcd/reality/{world}.pcd` | 使用 reality 子目录 |
+| `namespace` | string | `""` (空) | 机器人命名空间（空串 = 无前缀） |
+| `slam` | bool | `False` | `True`=SLAM 建图；`False`=定位导航 |
+| `world` | string | `rmul_2026` | 场地名，决定 map/pcd 路径 |
+| `map` | string | `map/reality/{world}.yaml` | 2D 地图路径 |
+| `prior_pcd_file` | string | `pcd/reality/{world}.pcd` | 先验 PCD 文件路径 |
 | `use_sim_time` | bool | `False` | 使用系统真实时钟 |
 | `params_file` | string | `config/reality/nav2_params.yaml` | 实车专用参数 |
-| `use_robot_state_pub` | bool | `False` | 实车专有参数：是否启动 robot_state_publisher（仿真由 Gazebo 提供） |
-| `use_rviz` | bool | `True` | 同仿真 |
+| `use_robot_state_pub` | bool | `False` | 是否启动 robot_state_publisher |
+| `use_rviz` | bool | `True` | 是否启动 RViz 可视化 |
 
 ### 实车专有节点
-- **livox_ros_driver2**: Livox MID360 激光雷达驱动，仅实车模式启动。
-- **robot_state_publisher**: 发布机器人 URDF/TF（仿真中由 Gazebo 提供，实车中需手动启用）。
+- **livox_ros_driver2**: Livox MID360 激光雷达驱动。
+- **robot_state_publisher**: 发布机器人 URDF/TF（需手动通过 `use_robot_state_pub:=True` 启用）。
 
 ### 网络配置
 
@@ -211,7 +133,7 @@ Livox MID360 网络配置文件位于 `sentry_nav_bringup/config/reality/mid360_
 
 ---
 
-## 4. SLAM 建图模式
+## 3. SLAM 建图模式
 
 ### 工作原理
 
@@ -230,9 +152,6 @@ SLAM 模式通过 `slam:=True` 参数触发。与导航模式的主要区别：
 ### 启动命令
 
 ```bash
-# 仿真建图
-ros2 launch sentry_nav_bringup rm_navigation_simulation_launch.py slam:=True
-
 # 实车建图
 ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py slam:=True use_robot_state_pub:=True
 ```
@@ -240,9 +159,6 @@ ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py slam:=True use_ro
 ### 建图后保存地图
 
 ```bash
-# 保存 2D 栅格地图（指定命名空间，仿真模式下需要）
-ros2 run nav2_map_server map_saver_cli -f ~/my_map --ros-args -r __ns:=/red_standard_robot1
-
 # 实车模式（无命名空间）
 ros2 run nav2_map_server map_saver_cli -f ~/my_map
 ```
@@ -270,7 +186,7 @@ ros2 run nav2_map_server map_saver_cli -f ~/my_map
 
 ---
 
-## 5. 行为树决策系统
+## 4. 行为树决策系统
 
 ### 概述
 
@@ -279,11 +195,6 @@ ros2 run nav2_map_server map_saver_cli -f ~/my_map
 ### 启动命令
 
 ```bash
-# 仿真环境
-ros2 launch sentry_behavior sentry_behavior_launch.py \
-  namespace:=red_standard_robot1 \
-  use_sim_time:=True
-
 # 实车环境
 ros2 launch sentry_behavior sentry_behavior_launch.py \
   use_sim_time:=False
@@ -400,35 +311,9 @@ ros2 launch sentry_behavior sentry_behavior_launch.py target_tree:=b
 
 ---
 
-## 6. 多机器人仿真
+## 5. 辅助工具
 
-> **实验性功能**：多机模式仍在开发中，可能存在 TF 冲突或资源竞争问题。
-
-### 启动命令
-
-```bash
-ros2 launch sentry_nav_bringup rm_multi_navigation_simulation_launch.py \
-  world:=rmuc_2025 \
-  robots:="robot1={x: 1.0, y: 1.0, yaw: 1.5707}; robot2={x: -1.0, y: -1.0, yaw: 0.0}"
-```
-
-每个机器人会获得独立的：
-- 命名空间 (如 `/robot1`, `/robot2`)
-- Nav2 导航栈实例
-- RViz 可视化窗口
-
-### 参数
-
-| 参数 | 类型 | 说明 |
-|:---|:---|:---|
-| `robots` | string | 机器人初始位姿。格式: `"name={x: X, y: Y, yaw: YAW}; ..."` |
-| `world` | string | 仿真世界名 |
-
----
-
-## 7. 辅助工具
-
-### 7.1 手柄遥控
+### 5.1 手柄遥控
 
 导航 launch 文件默认内嵌启动手柄控制节点。也可独立启动：
 
@@ -438,7 +323,7 @@ ros2 launch sentry_nav_bringup joy_teleop_launch.py
 
 PS4 手柄键位映射在 `nav2_params.yaml` 的 `teleop_twist_joy_node:` 段配置。
 
-### 7.2 地图坐标拾取工具
+### 5.2 地图坐标拾取工具
 
 使用 matplotlib 可视化地图并交互式拾取坐标（用于设定行为树中的目标点）：
 
@@ -446,7 +331,7 @@ PS4 手柄键位映射在 `nav2_params.yaml` 的 `teleop_twist_joy_node:` 段配
 ros2 launch location map_visualizer_launch.py
 ```
 
-### 7.3 独立模块启动
+### 5.3 独立模块启动
 
 以下模块可独立启动，用于调试或单元测试：
 
@@ -463,17 +348,16 @@ ros2 launch location map_visualizer_launch.py
 
 ---
 
-## 8. Nav2 导航参数详解
+## 6. Nav2 导航参数详解
 
 参数文件位于：
-- 仿真：`sentry_nav_bringup/config/simulation/nav2_params.yaml`
 - 实车：`sentry_nav_bringup/config/reality/nav2_params.yaml`
 
-### 8.1 全局规划器
+### 6.1 全局规划器
 
-**仿真和实车均使用 `nav2_smac_planner::SmacPlanner2D`**。全向底盘无最小转弯半径约束，SmacPlanner2D（2D A*）在此场景下路径更简洁，计算开销低于 Hybrid A*。
+**系统使用 `nav2_smac_planner::SmacPlanner2D`**。全向底盘无最小转弯半径约束，SmacPlanner2D（2D A*）在此场景下路径更简洁，计算开销低于 Hybrid A*。
 
-#### SmacPlanner2D（仿真 & 实车）
+#### SmacPlanner2D
 
 | 参数 | 值 | 说明 |
 |:---|:---|:---|
@@ -482,34 +366,34 @@ ros2 launch location map_visualizer_launch.py
 | `downsample_costmap` | `false` | 是否对代价地图进行下采样 |
 | `max_iterations` | `1000000` | 最大搜索迭代次数，-1 禁用 |
 
-### 8.2 局部控制器 - OmniPidPursuitController
+### 6.2 局部控制器 - OmniPidPursuitController
 
-仿真和实车均使用此控制器：
+实车使用此控制器：
 
-| 参数 | 仿真 | 实车 | 说明 |
-|:---|:---|:---|:---|
-| `lookahead_dist` | `2.0` | `2.0` | 前瞻距离 (m) |
-| `v_linear_max` | `2.5` | `2.5` | 最大线速度 (m/s) |
-| `v_angular_max` | `3.0` | `3.0` | 最大角速度 (rad/s) |
-| `curvature_max` | `1.0` | `1.0` | 触发减速的最大曲率阈值 |
-| `reduction_ratio` | `0.5` | `0.5` | 高曲率时速度缩减比例 |
-| `enable_rotation` | `false` | `false` | 是否旋转到目标朝向（全向底盘不需要） |
-| `target_frame` | `gimbal_yaw_fake` | `gimbal_yaw_fake` | 控制器参考坐标系 |
+| 参数 | 值 | 说明 |
+|:---|:---|:---|
+| `lookahead_dist` | `2.0` | 前瞻距离 (m) |
+| `v_linear_max` | `2.5` | 最大线速度 (m/s) |
+| `v_angular_max` | `3.0` | 最大角速度 (rad/s) |
+| `curvature_max` | `1.0` | 触发减速的最大曲率阈值 |
+| `reduction_ratio` | `0.5` | 高曲率时速度缩减比例 |
+| `enable_rotation` | `false` | 是否旋转到目标朝向（全向底盘不需要） |
+| `target_frame` | `gimbal_yaw_fake` | 控制器参考坐标系 |
 
-### 8.3 代价地图 (Costmap2D)
+### 6.3 代价地图 (Costmap2D)
 
 #### 局部代价地图 (Local Costmap)
 
-| 参数 | 仿真 | 实车 | 说明 |
-|:---|:---|:---|:---|
-| `update_frequency` | `10.0` | `30.0` | 更新频率 (Hz) |
-| `publish_frequency` | `5.0` | `30.0` | 发布频率 (Hz) |
-| `width` | `5.0` | `5.0` | 滚动窗口宽度 (m) |
-| `height` | `5.0` | `5.0` | 滚动窗口高度 (m) |
-| `resolution` | `0.05` | `0.05` | 分辨率 (m/像素) |
-| `robot_radius` | `0.2` | `0.24` | 机器人外接圆半径 (m) |
-| `inflation_radius` | `0.7` | `0.5` | 膨胀半径 (m) |
-| `cost_scaling_factor` | `4.0` | `4.0` | 代价随距离衰减的指数因子 |
+| 参数 | 值 | 说明 |
+|:---|:---|:---|
+| `update_frequency` | `30.0` | 更新频率 (Hz) |
+| `publish_frequency` | `30.0` | 发布频率 (Hz) |
+| `width` | `5.0` | 滚动窗口宽度 (m) |
+| `height` | `5.0` | 滚动窗口高度 (m) |
+| `resolution` | `0.05` | 分辨率 (m/像素) |
+| `robot_radius` | `0.24` | 机器人外接圆半径 (m) |
+| `inflation_radius` | `0.5` | 膨胀半径 (m) |
+| `cost_scaling_factor` | `4.0` | 代价随距离衰减的指数因子 |
 
 **插件层顺序**：`static_layer` → `IntensityVoxelLayer` → `inflation_layer`
 
@@ -521,18 +405,18 @@ ros2 launch location map_visualizer_launch.py
 - 覆盖整个场地（非滚动窗口）
 - IntensityVoxelLayer 订阅 `terrain_map_ext` 话题（更大感知范围）
 
-### 8.4 速度平滑器 (Velocity Smoother)
+### 6.4 速度平滑器 (Velocity Smoother)
 
-| 参数 | 仿真 | 实车 | 说明 |
-|:---|:---|:---|:---|
-| `smoothing_frequency` | `20.0` | `30.0` | 平滑处理频率 (Hz)，**必须与 `controller_frequency` 一致** |
-| `max_velocity` | `[2.5, 2.5, 3.0]` | `[1.5, 1.5, 3.0]` | 最大速度 [vx, vy, vθ] (m/s, m/s, rad/s) |
-| `min_velocity` | `[-2.5, -2.5, -3.0]` | `[-1.5, -1.5, -3.0]` | 最小速度（反向） |
-| `max_accel` | `[4.5, 4.5, 5.0]` | `[3.0, 3.0, 5.0]` | 最大加速度 [ax, ay, aθ] |
-| `max_decel` | `[-4.5, -4.5, -5.0]` | `[-3.0, -3.0, -5.0]` | 最大减速度 |
-| `feedback` | `OPEN_LOOP` | `OPEN_LOOP` | 反馈模式。`OPEN_LOOP` 不依赖里程计反馈 |
+| 参数 | 值 | 说明 |
+|:---|:---|:---|
+| `smoothing_frequency` | `30.0` | 平滑处理频率 (Hz)，**必须与 `controller_frequency` 一致** |
+| `max_velocity` | `[1.5, 1.5, 3.0]` | 最大速度 [vx, vy, vθ] (m/s, m/s, rad/s) |
+| `min_velocity` | `[-1.5, -1.5, -3.0]` | 最小速度（反向） |
+| `max_accel` | `[3.0, 3.0, 5.0]` | 最大加速度 [ax, ay, aθ] |
+| `max_decel` | `[-3.0, -3.0, -5.0]` | 最大减速度 |
+| `feedback` | `OPEN_LOOP` | 反馈模式。`OPEN_LOOP` 不依赖里程计反馈 |
 
-### 8.5 恢复行为插件
+### 6.5 恢复行为插件
 
 | 插件名 | 说明 |
 |:---|:---|
@@ -542,7 +426,7 @@ ros2 launch location map_visualizer_launch.py
 | `Wait` | 原地等待指定时间 |
 | `AssistedTeleop` | 辅助遥控模式 |
 
-### 8.6 Nav2 导航行为树
+### 6.6 Nav2 导航行为树
 
 | 文件 | 用途 |
 |:---|:---|
@@ -551,50 +435,50 @@ ros2 launch location map_visualizer_launch.py
 
 ---
 
-## 9. 定位模块参数详解
+## 7. 定位模块参数详解
 
-### 9.1 Point-LIO 里程计
+### 7.1 Point-LIO 里程计
 
-| 参数 | 仿真 | 实车 | 说明 |
-|:---|:---|:---|:---|
-| `common.lid_topic` | `velodyne_points` | `livox/lidar` | LiDAR 输入话题 |
-| `common.imu_topic` | `livox/imu` | `livox/imu` | IMU 输入话题 |
-| `preprocess.lidar_type` | `2` (Velodyne) | `1` (Livox) | LiDAR 类型: 1=Livox, 2=Velodyne, 3=Ouster |
-| `preprocess.scan_line` | `32` | `4` | 扫描线数（MID360 实际为 4 线） |
-| `preprocess.timestamp_unit` | `0` (秒) | `3` (纳秒) | **仿真必须为 0**：`ign_sim_pointcloud_tool` 写入的每点时间戳单位是秒；设错会导致 Point-LIO 时间戳乱序 |
-| `preprocess.blind` | `0.5` | `0.2` | 盲区半径 (m)，过滤近距离噪声 |
-| `mapping.acc_norm` | `9.81` | `1.0` | 加速度单位：1.0=g, 9.81=m/s² |
-| `mapping.satu_acc` | `30.0` | `4.0` | IMU 加速度计饱和值 |
-| `mapping.gravity` | `[0, -4.9, -8.49]` | `[2.64, 0, -9.68]` | **重力向量，必须匹配 LiDAR 安装倾角** |
-| `mapping.gravity_init` | `[0, -4.9, -8.49]` | `[2.64, 0, -9.68]` | 初始重力估计 |
-| `mapping.extrinsic_T` | `[0, 0, 0]` | `[-0.011, -0.023, 0.044]` | LiDAR-IMU 外参平移 (m) |
-| `mapping.lidar_meas_cov` | `0.001` | `0.01` | LiDAR 测量协方差 |
-| `filter_size_surf` | `0.2` | `0.2` | 表面特征降采样步长 (m) |
-| `filter_size_map` | `0.2` | `0.2` | 地图降采样步长 (m) |
-| `publish.tf_send_en` | `False` | `False` | TF 发布（禁用，由 odom_bridge 处理） |
-| `pcd_save.pcd_save_en` | `False` | `False` | 退出时保存 PCD（SLAM 模式自动设为 True） |
+| 参数 | 值 | 说明 |
+|:---|:---|:---|
+| `common.lid_topic` | `livox/lidar` | LiDAR 输入话题 |
+| `common.imu_topic` | `livox/imu` | IMU 输入话题 |
+| `preprocess.lidar_type` | `1` (Livox) | LiDAR 类型: 1=Livox, 2=Velodyne, 3=Ouster |
+| `preprocess.scan_line` | `4` | 扫描线数（MID360 实际为 4 线） |
+| `preprocess.timestamp_unit` | `3` (纳秒) | 实车 Livox 配置 |
+| `preprocess.blind` | `0.2` | 盲区半径 (m)，过滤近距离噪声 |
+| `mapping.acc_norm` | `1.0` | 加速度单位：1.0=g |
+| `mapping.satu_acc` | `4.0` | IMU 加速度计饱和值 |
+| `mapping.gravity` | `[2.64, 0, -9.68]` | **重力向量，必须匹配 LiDAR 安装倾角** |
+| `mapping.gravity_init` | `[2.64, 0, -9.68]` | 初始重力估计 |
+| `mapping.extrinsic_T` | `[-0.011, -0.023, 0.044]` | LiDAR-IMU 外参平移 (m) |
+| `mapping.lidar_meas_cov` | `0.01` | LiDAR 测量协方差 |
+| `filter_size_surf` | `0.2` | 表面特征降采样步长 (m) |
+| `filter_size_map` | `0.2` | 地图降采样步长 (m) |
+| `publish.tf_send_en` | `False` | TF 发布（禁用，由 odom_bridge 处理） |
+| `pcd_save.pcd_save_en` | `False` | 退出时保存 PCD（SLAM 模式自动设为 True） |
 
-> **调参警告**：`gravity` 向量必须精确匹配 LiDAR 的物理安装角度。仿真中 LiDAR 倾斜约 30° (`rpy=[0, pi/6, 0]`)，故重力分量为 `[0, -4.9, -8.49]`。实车需通过实际标定获得。错误的重力向量会导致里程计快速发散。
+> **调参警告**：`gravity` 向量必须精确匹配 LiDAR 的物理安装角度。错误的重力向量会导致里程计快速发散。
 
-### 9.2 Small GICP 重定位
+### 7.2 Small GICP 重定位
 
-| 参数 | 仿真 | 实车 | 说明 |
-|:---|:---|:---|:---|
-| `num_threads` | `4` | `8` | OpenMP 并行线程数 |
-| `num_neighbors` | `20` | `20` | 协方差估计邻域点数 |
-| `global_leaf_size` | `0.25` | `0.2` | 先验地图体素降采样步长 (m) |
-| `registered_leaf_size` | `0.25` | `0.1` | 累积扫描体素降采样步长 (m) |
-| `max_dist_sq` | **`9.0`** | **`3.0`** | GICP 对应点最大距离平方 (m²)。**仿真点云稀疏，需更大值** |
-| `max_iterations` | **`50`** | **`20`** | GICP 优化器最大迭代次数 |
-| `accumulated_count_threshold` | **`50`** | **`20`** | 累积多少帧点云后触发一次配准 |
-| `min_range` | **`0.3`** | **`0.5`** | 最小点云距离过滤 (m) |
-| `min_inlier_ratio` | **`0.1`** | **`0.3`** | 最小内点比率。**仿真需更低阈值** |
-| `max_fitness_error` | **`5.0`** | **`1.0`** | 最大每内点适配误差。**仿真需更高容忍度** |
-| `enable_periodic_relocalization` | `false` | `false` | 是否启用周期性重定位 |
-| `relocalization_interval` | `30.0` | `30.0` | 周期性重定位间隔 (秒) |
-| `map_frame` | `map` | `map` | 地图坐标系 |
-| `odom_frame` | `odom` | `odom` | 里程计坐标系 |
-| `prior_pcd_file` | (由 launch 传入) | (由 launch 传入) | 先验 PCD 地图文件路径 |
+| 参数 | 值 | 说明 |
+|:---|:---|:---|
+| `num_threads` | `8` | OpenMP 并行线程数 |
+| `num_neighbors` | `20` | 协方差估计邻域点数 |
+| `global_leaf_size` | `0.2` | 先验地图体素降采样步长 (m) |
+| `registered_leaf_size` | `0.1` | 累积扫描体素降采样步长 (m) |
+| `max_dist_sq` | `3.0` | GICP 对应点最大距离平方 (m²) |
+| `max_iterations` | `20` | GICP 优化器最大迭代次数 |
+| `accumulated_count_threshold` | `20` | 累积多少帧点云后触发一次配准 |
+| `min_range` | `0.5` | 最小点云距离过滤 (m) |
+| `min_inlier_ratio` | `0.3` | 最小内点比率 |
+| `max_fitness_error` | `1.0` | 最大每内点适配误差 |
+| `enable_periodic_relocalization` | `false` | 是否启用周期性重定位 |
+| `relocalization_interval` | `30.0` | 周期性重定位间隔 (秒) |
+| `map_frame` | `map` | 地图坐标系 |
+| `odom_frame` | `odom` | 里程计坐标系 |
+| `prior_pcd_file` | (由 launch 传入) | 先验 PCD 地图文件路径 |
 
 **质量门控机制**：
 1. GICP 必须报告收敛
@@ -603,9 +487,9 @@ ros2 launch location map_visualizer_launch.py
 4. 周期性修正幅度 < 2m（硬编码上限）
 5. **2D 约束**：输出的 map→odom 仅包含 (x, y, yaw)，z/roll/pitch 强制置零
 
-> **关键设计**：仿真环境点云远比实车稀疏，因此 GICP 相关阈值需大幅放宽。修改这些参数时，**必须同时更新** `config/simulation/` 和 `config/reality/` 两套配置。
+> **调参提示**：修改这些参数时以 `config/reality/` 配置为准。
 
-### 9.3 Livox MID360 驱动参数
+### 7.3 Livox MID360 驱动参数
 
 | 参数 | 默认值 | 说明 |
 |:---|:---|:---|
@@ -616,31 +500,31 @@ ros2 launch location map_visualizer_launch.py
 
 ---
 
-## 10. 地形分析参数详解
+## 8. 地形分析参数详解
 
-### 10.1 Terrain Analysis (局部地形)
+### 8.1 Terrain Analysis (局部地形)
 
 订阅 `sensor_scan` + `odometry`，发布 `terrain_map` → 供**局部代价地图** IntensityVoxelLayer 使用。
 
-| 参数 | 仿真 | 实车 | 说明 |
-|:---|:---|:---|:---|
-| `scanVoxelSize` | `0.05` | `0.05` | 点云降采样步长 (m) |
-| `decayTime` | `0.5` | `0.5` | 点云衰减时间 (秒)，超过此时间的点被丢弃 |
-| `noDecayDis` | `0.0` | `0.0` | 此距离内的点不衰减 (m) |
-| `clearingDis` | `0.0` | `0.0` | 超出此距离的点被清除 (m)，0=禁用 |
-| `useSorting` | `true` | `true` | 使用分位数地面估计（支持坡道识别）。**不可与 considerDrop 同时启用** |
-| `quantileZ` | `0.2` | `0.2` | Z 方向分位数（仅 useSorting=true 时生效） |
-| `considerDrop` | `false` | `false` | 考虑凹地形（绝对高度差） |
-| `clearDyObs` | `true` | `true` | 清除动态障碍物 |
-| `minDyObsDis` | `0.3` | `0.5` | 动态障碍物最小检测距离 (m) |
-| `vehicleHeight` | `0.5` | `0.55` | 机器人高度 (m)，仅处理低于此高度的点 |
-| `minRelZ` | `-1.5` | `-1.5` | 有效点最低相对高度 (m) |
-| `maxRelZ` | `0.5` | `0.5` | 有效点最高相对高度 (m) |
-| `disRatioZ` | `0.2` | `0.2` | Z 范围随距离缩放因子（坡道补偿） |
-| `minBlockPointNum` | `10` | `10` | 每个体素块最少点数 |
-| `noDataObstacle` | `false` | `false` | 无数据区域视为障碍物 |
+| 参数 | 值 | 说明 |
+|:---|:---|:---|
+| `scanVoxelSize` | `0.05` | 点云降采样步长 (m) |
+| `decayTime` | `0.5` | 点云衰减时间 (秒)，超过此时间的点被丢弃 |
+| `noDecayDis` | `0.0` | 此距离内的点不衰减 (m) |
+| `clearingDis` | `0.0` | 超出此距离的点被清除 (m)，0=禁用 |
+| `useSorting` | `true` | 使用分位数地面估计（支持坡道识别）。**不可与 considerDrop 同时启用** |
+| `quantileZ` | `0.2` | Z 方向分位数（仅 useSorting=true 时生效） |
+| `considerDrop` | `false` | 考虑凹地形（绝对高度差） |
+| `clearDyObs` | `true` | 清除动态障碍物 |
+| `minDyObsDis` | `0.5` | 动态障碍物最小检测距离 (m) |
+| `vehicleHeight` | `0.55` | 机器人高度 (m)，仅处理低于此高度的点 |
+| `minRelZ` | `-1.5` | 有效点最低相对高度 (m) |
+| `maxRelZ` | `0.5` | 有效点最高相对高度 (m) |
+| `disRatioZ` | `0.2` | Z 范围随距离缩放因子（坡道补偿） |
+| `minBlockPointNum` | `10` | 每个体素块最少点数 |
+| `noDataObstacle` | `false` | 无数据区域视为障碍物 |
 
-### 10.2 Terrain Analysis Ext (全局地形)
+### 8.2 Terrain Analysis Ext (全局地形)
 
 订阅 `terrain_map`，发布 `terrain_map_ext` → 供**全局代价地图** IntensityVoxelLayer 使用。
 
@@ -656,7 +540,7 @@ ros2 launch location map_visualizer_launch.py
 
 ---
 
-## 11. 串口通信参数
+## 9. 串口通信参数
 
 ### 配置文件
 
@@ -706,36 +590,7 @@ ros2 launch location map_visualizer_launch.py
 
 ---
 
-## 12. 仿真与实车关键参数差异对照
-
-以下汇总了仿真和实车之间最关键的参数差异，部署时务必确认使用正确的配置文件：
-
-| 模块 | 参数 | 仿真 | 实车 | 差异原因 |
-|:---|:---|:---|:---|:---|
-| **Point-LIO** | `lidar_type` | `2` (Velodyne) | `1` (Livox) | 仿真使用转换后的 Velodyne 格式 |
-| | `lid_topic` | `velodyne_points` | `livox/lidar` | 话题名不同 |
-| | `scan_line` | `32` | `4` | 仿真模拟的扫描线数不同 |
-| | `timestamp_unit` | `0` (秒) | `3` (纳秒) | **仿真必须为 0**：`ign_sim_pointcloud_tool` 写入的每点时间戳单位是秒 |
-| | `gravity` | `[0, -4.9, -8.49]` | `[2.64, 0, -9.68]` | LiDAR 安装角度不同 |
-| | `acc_norm` | `9.81` | `1.0` | 加速度单位不同 |
-| **GICP** | `max_dist_sq` | `9.0` | `3.0` | 仿真点云稀疏 |
-| | `min_inlier_ratio` | `0.1` | `0.3` | 仿真匹配率低 |
-| | `max_fitness_error` | `5.0` | `1.0` | 仿真误差大 |
-| | `max_iterations` | `50` | `20` | 仿真需更多迭代 |
-| | `num_threads` | `4` | `8` | 实车算力更强 |
-| **Nav2** | `controller_frequency` | `20.0` | `30.0` | 实车需要更高控制频率 |
-| | `costmap update_frequency` | `10.0` | `30.0` | 实车实时性要求更高 |
-| | `planner plugin` | `SmacPlanner2D` | `SmacPlanner2D` | 仿真和实车均使用 2D A* |
-| | `robot_radius` | `0.2` | `0.30` | 实车尺寸略大（留余量）|
-| | `inflation_radius` | `0.7` | `0.5` | 实车场地较小 |
-| | `max_velocity` | `[2.5, 2.5, 3.0]` | `[1.5, 1.5, 3.0]` | 实车线速度上限更保守 |
-| | `max_accel` | `[4.5, 4.5, 5.0]` | `[3.0, 3.0, 5.0]` | 实车加速度上限 |
-| **地形** | `vehicleHeight` | `0.5` | `0.55` | 实车高度不同 |
-| | `minDyObsDis` | `0.3` | `0.5` | 实车动态障碍检测距离更大 |
-
----
-
-## 13. 常见调参场景
+## 10. 常见调参场景
 
 ### 场景 1: 机器人频繁撞墙
 
@@ -774,13 +629,8 @@ ros2 launch location map_visualizer_launch.py
 - 设置 `use_cout_logger: true` 查看终端日志
 - 确认 Nav2 导航栈已正常启动（行为树通过 `/goal_pose` 发布目标）
 
-### 场景 6: 仿真启动后 Point-LIO 报错 "lidar loop back"
-
-- 这是启动时序问题：**必须先启动 Gazebo 并 unpause，等仿真时钟稳定后再启动导航栈**
-- 通常 IMU 初始化完成后会自行恢复，可等待 10-15 秒
-
-### 场景 7: 需要切换比赛策略
+### 场景 6: 需要切换比赛策略
 
 1. 修改 `sentry_behavior.yaml` 中的 `target_tree` 值
 2. 或在 launch 命令中指定：`ros2 launch sentry_behavior sentry_behavior_launch.py target_tree:=b`
-3. 可选树名（`a` / `b` / `rmuc_2026_sentry` / `test_navigate`）参见[第 5 节 - 可用行为树](#可用行为树)
+3. 可选树名（`a` / `b` / `rmuc_2026_sentry` / `test_navigate`）参见[第 4 节 - 可用行为树](#可用行为树)

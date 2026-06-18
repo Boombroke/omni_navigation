@@ -12,7 +12,6 @@ sentry_nav 是哨兵机器人自主导航系统的顶层元包。它通过依赖
 - **omni_pid_pursuit_controller**: 专为全向轮底盘设计的 PID 路径追踪控制器。
 - **teleop_twist_joy**: 支持 PS4 等标准手柄的远程控制模块。
 - **fake_vel_transform**: 速度矢量在不同坐标系之间的转换工具。
-- **ign_sim_pointcloud_tool**: 将 Ignition 仿真环境中的原始数据转换为标准点云格式。
 - **pointcloud_to_laserscan**: 将三维点云数据投影为二维激光扫描数据，兼容传统导航算法。
 - **terrain_analysis**: 基础地形分析模块，用于实时检测环境中的障碍物。
 - **terrain_analysis_ext**: 地形分析扩展模块，提升了机器人在复杂坡道与障碍物环境下的通过性。

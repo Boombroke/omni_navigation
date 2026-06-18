@@ -3,7 +3,6 @@
 本文档列出了需要在实车上根据实际情况微调的参数，以及对应的调优方法。
 
 配置文件位置：
-- 仿真：`sentry_nav_bringup/config/simulation/nav2_params.yaml`
 - 实车：`sentry_nav_bringup/config/reality/nav2_params.yaml`
 
 ---
@@ -24,7 +23,7 @@
 ```bash
 # 1. 让机器人以目标速度（如 3m/s）跑直线并返回起点
 # 2. 观察回到起点时的位移误差
-ros2 topic echo /red_standard_robot1/aft_mapped_to_init --field pose.pose.position --once
+ros2 topic echo /aft_mapped_to_init --field pose.pose.position --once
 
 # 3. 同时监控 CPU 占用
 top -p $(pgrep -f point_lio)
@@ -50,10 +49,10 @@ top -p $(pgrep -f point_lio)
 **调优方法**：
 ```bash
 # 监控 point_lio 处理延迟（应 < 50ms/帧）
-ros2 topic delay /red_standard_robot1/aft_mapped_to_init
+ros2 topic delay /aft_mapped_to_init
 
 # 监控里程计频率（应接近 LiDAR 频率）
-ros2 topic hz /red_standard_robot1/aft_mapped_to_init
+ros2 topic hz /aft_mapped_to_init
 ```
 
 **判断标准**：
@@ -107,7 +106,7 @@ ps aux | grep point_lio | awk '{print $6/1024 "MB"}'
 
 ### 5. lidar_meas_cov（LiDAR 测量协方差）
 
-**当前值**：仿真 0.001，实车 0.01
+**当前值**：0.01
 
 **调优范围**：0.001 ~ 0.1
 
@@ -127,7 +126,6 @@ ps aux | grep point_lio | awk '{print $6/1024 "MB"}'
 **判断标准**：
 - 空旷/走廊场景里程计抖动 → 增大到 0.05 或 0.1
 - 纹理丰富场景精度不足 → 减小到 0.005 或 0.001
-- 实车一般用 0.01（mid360 噪声比仿真大）
 
 ---
 
@@ -166,7 +164,7 @@ ps aux | grep point_lio | awk '{print $6/1024 "MB"}'
 
 ### 8. blind（近距离过滤半径）
 
-**当前值**：仿真 0.5m，实车 0.2m
+**当前值**：0.2m
 
 **调优范围**：0.2 ~ 1.0
 
@@ -231,26 +229,13 @@ ps aux | grep point_lio | awk '{print $6/1024 "MB"}'
 
 ### 11. timestamp_unit（时间戳单位）
 
-> **仿真专属坑，必须正确设置。**
+**当前值**：`3`（纳秒，实车 Livox 配置）
 
-**当前值**：仿真 `0`（秒），实车 `3`（纳秒）
+确保 `config/reality/nav2_params.yaml` 中 Point-LIO 段落设置为纳秒：
 
-**背景**：`ign_sim_pointcloud_tool` 将 Gazebo 的 `PointCloudPacked` 转换为 `PointCloud2` 时，写入的每点时间戳（`t` 字段）单位是**秒**。Point-LIO 根据 `timestamp_unit` 参数解释该字段：
-
-| `timestamp_unit` 值 | 含义 |
-|---|---|
-| `0` | 秒（仿真配置） |
-| `1` | 毫秒 |
-| `2` | 微秒 |
-| `3` | 纳秒（实车 Livox 配置） |
-
-若仿真中配置错误（如设为 `2` 或 `3`），Point-LIO 会将秒级时间戳解释为微秒或纳秒，计算出荒谬的时间差，导致里程计立即发散并持续报 `lidar loop back, clear buffer`。
-
-**确认方式**：
 ```bash
-# 确认仿真 nav2_params.yaml 中 point_lio 段落里：
-grep "timestamp_unit" src/sentry_nav_bringup/config/simulation/nav2_params.yaml
-# 应输出: timestamp_unit: 0
+grep "timestamp_unit" src/sentry_nav_bringup/config/reality/nav2_params.yaml
+# 应输出: timestamp_unit: 3
 ```
 
 ---
@@ -315,13 +300,12 @@ velocity_smoother 是 Nav2 官方节点，位于 controller_server 和 fake_vel_
 
 ### 15. smoothing_frequency（平滑器频率）
 
-**当前值**：仿真 20Hz，实车 30Hz
+**当前值**：30Hz
 
 **核心原则**：必须与 `controller_frequency` 一致，否则高频端指令被丢弃。
 
 | 环境 | controller_frequency | smoothing_frequency | 状态 |
 |---|---|---|---|
-| 仿真 | 20 | 20 | ✅ 匹配 |
 | 实车 | 30 | 30 | ✅ 匹配 |
 
 **判断标准**：
@@ -340,9 +324,6 @@ velocity_smoother 是 Nav2 官方节点，位于 controller_server 和 fake_vel_
 **调优方法**：
 ```bash
 # 运行 serial_visualizer 观察 cmd vs actual 曲线
-# 仿真:
-python3 src/sentry_tools/serial_visualizer.py --ros-args -r __ns:=/red_standard_robot1
-# 实车:
 python3 src/sentry_tools/serial_visualizer.py
 ```
 
@@ -353,7 +334,7 @@ python3 src/sentry_tools/serial_visualizer.py
 
 ### 17. max_accel / max_decel（加速度限制）
 
-**当前值**：仿真 `[4.5, 4.5, 5.0]` / `[-4.5, -4.5, -5.0]`；实车 `[3.0, 3.0, 5.0]` / `[-3.0, -3.0, -5.0]`
+**当前值**：实车 `[3.0, 3.0, 5.0]` / `[-3.0, -3.0, -5.0]`
 
 **调优范围**：1.0 ~ 6.0 m/s²
 
@@ -374,14 +355,13 @@ python3 src/sentry_tools/serial_visualizer.py
 ```
 
 **判断标准**：
-- 仿真摩擦力限制 ≈ 0.2g ≈ 2.0 m/s²，当前 4.5 超过物理极限（仿真中 smoother 无实际意义）
 - 实车需实测：全速加速时观察轮子是否打滑
 
 ### 18. max_velocity（最大速度限制）
 
-**当前值**：仿真 `[2.5, 2.5, 3.0]`，实车 `[1.5, 1.5, 3.0]`
+**当前值**：`[1.5, 1.5, 3.0]`
 
-应与 controller 的 `v_linear_max` / `v_angular_max` 一致或略大。如果 smoother 限速比 controller 小，controller 的指令会被截断。实车线速度上限 1.5 m/s 比仿真更保守，防止过快加速导致打滑。
+应与 controller 的 `v_linear_max` / `v_angular_max` 一致或略大。如果 smoother 限速比 controller 小，controller 的指令会被截断。线速度上限 1.5 m/s，防止过快加速导致打滑。
 
 ### 19. deadband_velocity（死区）
 
@@ -401,14 +381,14 @@ python3 src/sentry_tools/serial_visualizer.py
 
 ```bash
 # Point-LIO 里程计频率（应接近 LiDAR 频率）
-ros2 topic hz /red_standard_robot1/aft_mapped_to_init
+ros2 topic hz /aft_mapped_to_init
 
 # Point-LIO 处理延迟（应 < 50ms）
-ros2 topic delay /red_standard_robot1/aft_mapped_to_init
+ros2 topic delay /aft_mapped_to_init
 
 # 注册点云频率和点数
-ros2 topic hz /red_standard_robot1/registered_scan
-ros2 topic echo /red_standard_robot1/registered_scan --field width --once
+ros2 topic hz /registered_scan
+ros2 topic echo /registered_scan --field width --once
 
 # GICP 重定位状态
 grep "GICP" /tmp/nav_log.txt
@@ -420,5 +400,5 @@ top -p $(pgrep -f "point_lio|terrain|nav2_container")
 ps aux | grep point_lio | awk '{print $6/1024 "MB"}'
 
 # TF 延迟（应 < 100ms）
-ros2 run tf2_ros tf2_monitor map odom --ros-args -r __ns:=/red_standard_robot1
+ros2 run tf2_ros tf2_monitor map odom
 ```

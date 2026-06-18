@@ -1,6 +1,6 @@
 # sentry_robot_description
 
-哨兵机器人 SDF/XMacro 描述包，适配 RoboMaster 2026 全向麦轮主线。描述文件由 [xmacro](https://github.com/gezp/xmacro) 格式编写，通过 Python API 在 launch 文件中动态生成 SDF / URDF，供 Gazebo 仿真与 `robot_state_publisher` 使用。
+哨兵机器人 SDF/XMacro 描述包，适配 RoboMaster 2026 全向麦轮主线。描述文件由 [xmacro](https://github.com/gezp/xmacro) 格式编写，通过 Python API 在 launch 文件中动态生成 SDF / URDF，供 `robot_state_publisher` 使用。
 
 ## 文件结构
 
@@ -10,7 +10,6 @@ sentry_robot_description/
 │   ├── models/                    # 引用的外部模型（mid360/camera/rplidar）
 │   └── xmacro/
 │       ├── sentry_robot.sdf.xmacro       # 实车模型（当前活跃）
-│       ├── simulation_robot.sdf.xmacro   # 仿真模型
 │       └── infantry_robot.sdf.xmacro     # 步兵模型
 ├── launch/
 │   └── robot_description_launch.py
@@ -29,33 +28,15 @@ sentry_robot_description/
 | Livox Mid360 (`front_` 前缀) | `gimbal_yaw` | 50 Hz，1875 samples，安装偏移 `-0.15 0 0.15`，朝向 `π`（向后） |
 | 工业相机 `industrial_camera` | `gimbal_pitch` | 30 Hz，1920×1080，FOV 1 rad |
 
-Gazebo 插件：
+SDF 插件定义（供参考）：
 
 | 插件 | 说明 |
 |---|---|
-| `MecanumDrive2` | 全向麦轮底盘，控制 front/rear left/right 四个车轮关节 |
+| `MecanumDrive2` | 全向麦轮底盘驱动（SDF 内定义的插件名） |
 | `JointController` × 2 | gimbal_yaw（P=0.2，I=0.01）和 gimbal_pitch（P=1，I=0.01）速度控制 |
 | `JointStatePublisher` | 关节状态发布 |
 | `LightBarController` | 装甲板灯条颜色控制 |
 | `ProjectileShooter` | 17mm 弹丸射击（初速 20 m/s） |
-
-### simulation_robot.sdf.xmacro（仿真）
-
-与实车模型结构相同，差异在传感器挂载点和参数上：
-
-| 传感器 | 挂载点 | 差异 |
-|---|---|---|
-| RPLidar A2 | `chassis` | 10 Hz，400 samples（仅仿真） |
-| Livox Mid360 | `chassis` | 20 Hz，1200 samples（仿真固连底盘而非云台） |
-| 工业相机 | `gimbal_pitch` | 5 Hz，640×480 |
-
-两个模型的底盘高度、云台 yaw 高度等几何参数也有差异：
-
-| 参数 | 实车 | 仿真 |
-|---|---|---|
-| `chassis_height` | 0.107 m | 0.076 m |
-| `gimbal_yaw_height` | 0.026 m | 0.1376 m |
-| `gimbal_pitch_height` | 0.355 m | 0.16 m |
 
 ## URDF / SDF 生成
 
@@ -95,9 +76,9 @@ ros2 launch sentry_robot_description robot_description_launch.py
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `robot_name` | `simulation_robot` | XMacro 文件名（无后缀），从 `resource/xmacro/` 加载 |
+| `robot_name` | `sentry_robot` | XMacro 文件名（无后缀），从 `resource/xmacro/` 加载 |
 | `robot_xmacro_file` | — | XMacro 文件绝对路径（优先级高于 `robot_name`） |
-| `use_sim_time` | `False` | 是否使用仿真时间 |
+| `use_sim_time` | `False` | 是否使用仿真时间（实车默认 False） |
 | `use_rviz` | `True` | 是否启动 RViz |
 | `params_file` | `params/robot_description.yaml` | 参数文件路径 |
 

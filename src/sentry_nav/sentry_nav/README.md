@@ -13,7 +13,6 @@
 | `omni_pid_pursuit_controller` | 全向 PID 路径跟踪控制器，实现 `nav2_core::Controller` 插件接口，插件名 `omni_pid_pursuit_controller::OmniPidPursuitController` |
 | `nav2_plugins` | 自定义 Nav2 插件集：`IntensityVoxelLayer`（强度体素代价地图层）+ `BackUpFreeSpace`（自由空间后退恢复） |
 | `small_gicp_relocalization` | 基于 small_gicp 的全局重定位，对齐先验 PCD 地图，输出 `map→odom` TF |
-| `ign_sim_pointcloud_tool` | 将 Ignition/Gazebo 仿真中的传感器原始数据转为标准点云格式 |
 
 ### 第三方 Fork 包
 

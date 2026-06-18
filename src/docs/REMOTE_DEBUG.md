@@ -12,19 +12,9 @@ sudo apt install ros-jazzy-foxglove-bridge
 
 ### 1.2 启动导航时启用 Foxglove
 
-仿真环境：
-```bash
-ros2 launch sentry_nav_bringup rm_navigation_simulation_launch.py use_foxglove:=true
-```
-
 实车环境：
 ```bash
 ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py use_foxglove:=true
-```
-
-可以同时启用 RViz 和 Foxglove：
-```bash
-ros2 launch sentry_nav_bringup rm_navigation_simulation_launch.py use_rviz:=true use_foxglove:=true
 ```
 
 无头模式（无显示器的实车推荐）：
@@ -110,7 +100,7 @@ sudo ufw allow 8765/tcp
 | **Log** | ROS 日志 | `/rosout` |
 | **Topic List** | 话题频率监控 | 自动发现 |
 
-> **命名空间提醒**：仿真默认命名空间 `red_standard_robot1`，所有话题带前缀，如 `/red_standard_robot1/cmd_vel_chassis`、`/red_standard_robot1/map`。实车默认命名空间为空，话题无前缀。在 Foxglove 面板中选择话题时注意确认前缀。
+> **命名空间提醒**：实车默认命名空间为空，话题无前缀。
 
 ### 3.2 添加 3D 面板步骤
 
@@ -213,8 +203,6 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \
     -p topic_whitelist:="['/map', '/plan', '/tf', '/tf_static', '/global_costmap/costmap', '/local_costmap/costmap', '/odometry', '/cmd_vel_chassis', '/rosout']"
 ```
 
-> 若有命名空间（如仿真默认 `red_standard_robot1`），话题名需加前缀，例如 `/red_standard_robot1/cmd_vel_chassis`。
-
 ---
 
 ## 6. 故障排查
@@ -224,10 +212,10 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \
 | 连接失败 | 防火墙阻止 8765 端口 | `sudo ufw allow 8765/tcp` |
 | 连接失败 | IP 地址错误 | 在机器人端 `ip addr show` 确认 IP |
 | 浏览器 Web 版报 mixed content | HTTPS 页面不允许 ws:// | 改用桌面版，或用 wss:// + TLS 证书 |
-| 看不到话题 | namespace 不匹配 | 话题带 namespace 前缀，如 `/red_standard_robot1/cmd_vel_chassis`；实车默认无前缀 |
+| 看不到话题 | namespace 不匹配 | 实车默认无前缀；确认话题名 |
 | 3D 面板空白 | 没有选择 Fixed Frame | 在 3D 面板设置中把 Frame 改为 `map` |
 | 点云/costmap 卡顿 | 带宽不够 | 降频或用 topic_whitelist 限制 |
-| TF 报错 | use_sim_time 不匹配 | 确认 foxglove_bridge 和导航栈的 use_sim_time 一致 |
+| TF 报错 | use_sim_time 配置不对 | 实车恒为 false，确认 foxglove_bridge 与导航栈一致 |
 
 ---
 
