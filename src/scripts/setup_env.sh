@@ -57,21 +57,7 @@ install_ros2_jazzy() {
     ok "ROS2 Jazzy 安装完成"
 }
 
-# ---------- 2. 安装 Gazebo Harmonic ----------
-install_gazebo() {
-    if command -v gz &>/dev/null; then
-        ok "Gazebo Harmonic 已安装"
-        return 0
-    fi
-
-    info "开始安装 Gazebo Harmonic..."
-
-    sudo apt install -y ros-jazzy-ros-gz
-
-    ok "Gazebo Harmonic 安装完成"
-}
-
-# ---------- 3. 安装系统依赖 ----------
+# ---------- 2. 安装系统依赖 ----------
 install_system_deps() {
     info "安装系统级依赖..."
 
@@ -111,7 +97,7 @@ install_system_deps() {
     ok "Python 工具依赖安装完成"
 }
 
-# ---------- 4. 安装 small_gicp ----------
+# ---------- 3. 安装 small_gicp ----------
 install_small_gicp() {
     if ldconfig -p 2>/dev/null | grep -q "small_gicp"; then
         ok "small_gicp 已安装"
@@ -144,7 +130,7 @@ install_small_gicp() {
     ok "small_gicp v1.0.0 安装完成"
 }
 
-# ---------- 5. 初始化 rosdep ----------
+# ---------- 4. 初始化 rosdep ----------
 init_rosdep() {
     info "初始化 rosdep..."
 
@@ -156,7 +142,7 @@ init_rosdep() {
     ok "rosdep 初始化完成"
 }
 
-# ---------- 6. 创建工作空间并编译 ----------
+# ---------- 5. 创建工作空间并编译 ----------
 build_workspace() {
     info "配置 ROS2 工作空间..."
 
@@ -195,12 +181,12 @@ build_workspace() {
     info "请执行以下命令加载环境:"
     echo -e "  ${GREEN}source $WS_DIR/install/setup.bash${NC}"
     echo ""
-    info "仿真模式启动:"
-    echo -e "  ${GREEN}ros2 launch sentry_nav_bringup rm_navigation_simulation_launch.py${NC}"
+    info "实车导航启动:"
+    echo -e "  ${GREEN}ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py use_robot_state_pub:=True${NC}"
     echo ""
 }
 
-# ---------- 7. 配置环境变量 (可选) ----------
+# ---------- 6. 配置环境变量 (可选) ----------
 setup_bashrc() {
     local SETUP_LINE="source $WS_DIR/install/setup.bash"
 
@@ -230,7 +216,6 @@ echo "============================================"
 echo ""
 
 install_ros2_jazzy
-install_gazebo
 install_system_deps
 install_small_gicp
 init_rosdep
