@@ -28,6 +28,7 @@
   <exec_depend>omni_pid_pursuit_controller</exec_depend>
   <exec_depend>small_gicp_relocalization</exec_depend>
   <exec_depend>pointcloud_to_laserscan</exec_depend>
+  <exec_depend>sentry_robot_description</exec_depend>
   <exec_depend>slam_toolbox</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>foxglove_bridge</exec_depend>
