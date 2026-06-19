@@ -8,7 +8,7 @@ RoboMaster 2026 赛季哨兵机器人 ROS2 自主导航系统。**全向 (Mecanu
 
 - **Maintainer**: boombroke <2218681402@qq.com>
 - **基于**: [pb2025_sentry_nav](https://github.com/SMBU-PolarBear-Robotics-Team/pb2025_sentry_nav)(Lihan Chen 等)二次开发并适配 RM2026 赛季
-- **当前分支**: `feat/robot_model_sync`
+- **当前分支**: `main`
 
 ## 系统架构
 
@@ -36,7 +36,7 @@ graph LR
 
     subgraph 决策层
         REF[裁判系统] --> BT[BehaviorTree.CPP<br/>RMUC.xml 战术树]
-        BT -->|navigate_to_pose action| GP
+        BT -->|PubGoal /goal_pose| GP
     end
 
     subgraph 执行层
@@ -72,8 +72,8 @@ map → odom → base_footprint → chassis → gimbal_yaw → gimbal_pitch → 
 ## 功能特性
 
 - **全向底盘 + 持续自旋**:四麦轮任意方向平移;底盘可固定 `spin_speed` 持续自旋(默认 3.14 rad/s),云台反向跟随保持指向稳定。
-- **决策层走 Nav2 action**:`sentry_behavior` 的 `NavigateTo`(继承 `BT::RosActionNode<NavigateToPose>`)直接调用 nav2 `navigate_to_pose` action,拿到真实 SUCCESS/FAILURE 与 feedback,不依赖 `/goal_pose` topic 的"立即 SUCCESS"语义。
-- **Reactive 决策树**:`RMUC.xml` 用 `WhileDoElse + KeepRunningUntilFailure(NavigateTo) + AlwaysSuccess` 组合,状态条件(弹丸 / 血量,来自裁判系统)变化时立刻 halt 当前导航并切换路径。
+- **决策层下发目标**:`sentry_behavior` 三棵战术树(`rmuc_defend` / `a` / `b`)用 `PubGoal`(`BT::SyncActionNode`)把 `PoseStamped` 发布到 `/goal_pose`(fire-and-forget,立即 SUCCESS);`NavigateTo`(`BT::RosActionNode<NavigateToPose>`,等真实 SUCCESS/FAILURE/feedback)保留在插件库供需要的树使用(`test_navigate.xml` 演示)。
+- **Reactive 决策树**:`RMUC.xml`(`rmuc_defend`)用 `KeepRunningUntilFailure + ReactiveSequence/ReactiveFallback + WhileDoElse` 实现守点↔补给滞回,裁判状态(弹丸 / 血量)变化时立刻 halt 当前分支并切换。
 - **高频定位**:Point-LIO 激光惯性紧耦合里程计 + small_gicp 先验地图全局重定位。
 - **地形感知**:基于 intensity 的体素代价层(`IntensityVoxelLayer`)+ `BackUpFreeSpace` 自由空间后退恢复。
 - **工具链**:串口 Mock、地图坐标拾取、串口实时数据可视化、INV-1~7 决策树回归脚本。
@@ -103,10 +103,9 @@ src/
 ├── serial/serial_driver/                # rm_serial_driver(v3.0 多包协议)
 ├── rm_interfaces/                       # 自定义消息(裁判系统 / 视觉)
 ├── BehaviorTree.ROS2/                   # [第三方] in-tree behaviortree_ros2 + btcpp_ros2_interfaces
-├── third_party/                         # [第三方] 上游工具(Multi_LiCa 雷达标定等)
 ├── scripts/                             # 环境配置与修复脚本
 └── docs/                                # 项目级文档
-tests/                                   # INV-1~7 决策树回归脚本 + mock NavigateToPose action server
+tests/                                   # INV-1~7 决策树回归脚本(注入裁判数据 + 抓 /goal_pose 坐标)
 ```
 
 > 全量包清单:`find src -name package.xml | xargs grep '<name>'`(当前 21 个 ROS 包)。
@@ -158,7 +157,7 @@ ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py slam:=False world
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `world` | 世界 / 地图名称 | `rmuc_2025` |
+| `world` | 世界 / 地图名称 | `204`(实车 launch 默认,需按地图名覆盖) |
 | `slam` | SLAM 建图模式(否则走先验图 + 重定位) | `False` |
 | `namespace` | 机器人命名空间 | `""` (空) |
 | `use_rviz` | 启动 RViz | `True` |
@@ -170,7 +169,7 @@ ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py slam:=False world
 
 ## 决策树回归测试
 
-`tests/inv_smoke.sh` 用 mock NavigateToPose action server 验证 `RMUC.xml` 在七条不变量(INV-1~7)下的行为不变性(需先 `source install/setup.bash`):
+`tests/inv_smoke.sh` 注入裁判数据驱动 `rmuc_defend` 树,从 `/goal_pose` topic 抓 `PubGoal` 坐标序列,验证七条不变量(INV-1~7)(需先 `source install/setup.bash`):
 
 ```bash
 source install/setup.bash
@@ -179,7 +178,7 @@ tests/inv_smoke.sh --baseline tests/baseline   # 录基线(重构前)
 tests/inv_smoke.sh --regress  tests/baseline   # 回归对比(重构后)
 ```
 
-七条不变量:阶段判定 / 首点压制 / 弹尽切补给 / 三段流转 / 阶段二驻守与回补给 / 比赛结束 / server 重启稳定性。
+七条不变量:未开赛不发目标 / 守点 (3.71,-0.61) / 弹尽切补给 (-0.27,-3.94) / 守↔补滞回 / 低血回补 / 比赛结束停止主决策 / server 重启后仍发守点。
 
 ## 调试工具
 
@@ -203,7 +202,7 @@ python3 src/sentry_tools/serial_visualizer.py
 | [运行模式说明](src/docs/RUNNING_MODES.md) | 实车建图 / 导航 / 行为树模式 |
 | [参数调优指南](src/docs/TUNING_GUIDE.md) | Point-LIO / Nav2 / OmniPidPursuit 调优 |
 | [远程调试指南](src/docs/REMOTE_DEBUG.md) | Foxglove 远程可视化 |
-| [决策树包说明](src/sentry_behavior/README.md) | RMUC.xml + NavigateTo + 条件插件 |
+| [决策树包说明](src/sentry_behavior/README.md) | RMUC.xml + PubGoal / 条件插件 |
 | [Nav2 启动包说明](src/sentry_nav_bringup/README.md) | launch / nav2_params 结构 |
 
 ## 致谢
