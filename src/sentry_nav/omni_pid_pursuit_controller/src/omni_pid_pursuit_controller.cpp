@@ -197,7 +197,7 @@ void OmniPidPursuitController::activate()
   RCLCPP_INFO(
     logger_,
     "Activating controller: %s of type "
-    "regulated_pure_pursuit_controller::OmniPidPursuitController",
+    "omni_pid_pursuit_controller::OmniPidPursuitController",
     plugin_name_.c_str());
   local_path_pub_->on_activate();
   carrot_pub_->on_activate();
@@ -215,7 +215,7 @@ void OmniPidPursuitController::deactivate()
   RCLCPP_INFO(
     logger_,
     "Deactivating controller: %s of type "
-    "regulated_pure_pursuit_controller::OmniPidPursuitController",
+    "omni_pid_pursuit_controller::OmniPidPursuitController",
     plugin_name_.c_str());
   local_path_pub_->on_deactivate();
   carrot_pub_->on_deactivate();
