@@ -1,22 +1,38 @@
 #!/usr/bin/env bash
-# RMUC.xml 决策树 INV-1~7 行为不变量回归脚本
+# RMUC.xml (BehaviorTree ID = rmuc_defend) 决策树 INV-1~7 行为不变量回归脚本
+#
+# rmuc_defend 守家逻辑 (见 RMUC.xml):
+#   - 比赛中 (game_progress==4) 且 HP>150 且 ammo>0  -> 驻守防守点 DEFEND=(3.71, -0.61)
+#   - HP<=150 或 ammo==0                              -> 回补给点 SUPPLY=(-0.27, -3.94)
+#   - 补满 (HP>=400 且 ammo>=50) / 状态恢复            -> 返回防守点 DEFEND=(3.71, -0.61)
+#   - game_progress 离开 4 (比赛结束) -> 停止主决策, 外层重置等下一场
+#
+# 目标投递机制: rmuc_defend 用 PubGoal (BT::SyncActionNode) 把 geometry_msgs/PoseStamped
+# publish 到 /goal_pose topic (并非调用 NavigateToPose action). PubGoal 在无订阅者时每
+# tick 重发并打 "0 subscribers, will retry next tick" warning, 等订阅者出现再交付. 因此
+# 抓取必须在注入裁判/目标"之前"就用显式类型挂上订阅 (否则 publisher 尚未创建时
+# `ros2 topic echo /goal_pose` 会报 "could not determine type").
 #
 # Usage:
-#   tests/inv_smoke.sh                          # 跑 7 个用例，仅 echo PASS/FAIL，exit = FAIL 数
-#   tests/inv_smoke.sh --baseline OUTDIR        # 跑用例，把 /goal_pose 抓取与 action result 写入 OUTDIR/inv_<N>.log
-#   tests/inv_smoke.sh --regress BASELINE_DIR   # 跑用例，并将当次输出与 BASELINE_DIR/inv_<N>.log diff
+#   tests/inv_smoke.sh                          # 跑 7 个用例, 仅 echo PASS/FAIL, exit = FAIL 数
+#   tests/inv_smoke.sh --baseline OUTDIR        # 跑用例, 把 /goal_pose 抓取写入 OUTDIR/inv_<N>.log
+#   tests/inv_smoke.sh --regress  BASELINE_DIR  # 跑用例, 并将当次输出与 BASELINE_DIR/inv_<N>.log diff
 #
-# 前置：
+# 前置:
 #   - 已 source ROS2 jazzy 与 install/setup.bash
-#   - sentry_behavior 已编（install/sentry_behavior 存在）
-#
-# 七条不变量见会话讨论 INV-1~7。
+#   - sentry_behavior 已编 (install/sentry_behavior 存在)
 set -u
 
 # Resolve repo root
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPO_ROOT="$( dirname "$SCRIPT_DIR" )"
 SHARE="$REPO_ROOT/install/sentry_behavior/share/sentry_behavior"
+
+# rmuc_defend 战术坐标 (来自 RMUC.xml)
+DEFEND='3.71,-0.61'
+SUPPLY='-0.27,-3.94'
+DEFEND_RE='^3\.71,-0\.61$'
+SUPPLY_RE='^-0\.27,-3\.94$'
 
 MODE="run"
 OUT_DIR=""
@@ -43,35 +59,35 @@ fi
 
 SRV_YAML="$WORK_DIR/srv.yaml"
 SERVER_LOG="$WORK_DIR/server.log"
-MOCK_LOG="$WORK_DIR/mock.log"
 SERVER_PID=""
-MOCK_PID=""
+ECHO_PID=""
 PASS_COUNT=0
 FAIL_COUNT=0
 
 cleanup() {
+  if [ -n "$ECHO_PID" ]; then
+    kill -KILL "$ECHO_PID" 2>/dev/null || true
+  fi
   if [ -n "$SERVER_PID" ]; then
     kill -INT "$SERVER_PID" 2>/dev/null || true
     sleep 1
     kill -KILL "$SERVER_PID" 2>/dev/null || true
   fi
-  if [ -n "$MOCK_PID" ]; then
-    kill -INT "$MOCK_PID" 2>/dev/null || true
-    sleep 1
-    kill -KILL "$MOCK_PID" 2>/dev/null || true
-  fi
   pkill -KILL -f sentry_behavior_server 2>/dev/null || true
-  pkill -KILL -f mock_navigate_to_pose_server 2>/dev/null || true
-  pkill -KILL -f "ros2 topic pub.*referee" 2>/dev/null || true
+  pkill -KILL -f "ros2 topic echo /goal_pose" 2>/dev/null || true
+  pkill -KILL -f "ros2 action send_goal /sentry_behavior" 2>/dev/null || true
+  pkill -KILL -f "pub_referee.py" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
+# tick_frequency 设高一点 (10Hz) 让 reactive 决策切换 + PubGoal "等订阅者后重发"
+# 节拍更紧凑; 这是测试专用 srv.yaml, 与生产 params/sentry_behavior.yaml 无关.
 cat > "$SRV_YAML" <<EOF
 bt_action_server:
   ros__parameters:
     use_sim_time: false
     action_name: sentry_behavior
-    tick_frequency: 2
+    tick_frequency: 10
     groot2_port: 1667
     ros_plugins_timeout: 1000
     use_cout_logger: false
@@ -81,51 +97,33 @@ bt_action_server:
       - sentry_behavior/behavior_trees
 EOF
 
-start_mock_nav() {
-  pkill -KILL -f mock_navigate_to_pose_server 2>/dev/null || true
-  sleep 1
-  : > "$MOCK_LOG"
-  python3 -u "$REPO_ROOT/tests/mock_navigate_to_pose_server.py" \
-    --result succeed --duration 0.6 \
-    > "$MOCK_LOG" 2>&1 &
-  MOCK_PID=$!
-  # 等 action server 注册
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    if grep -q "NavigateToPose server up" "$MOCK_LOG" 2>/dev/null; then
-      return 0
-    fi
-    sleep 0.5
-  done
-  echo "[ERR] mock NavigateToPose server failed to come up:" >&2
-  tail -20 "$MOCK_LOG" >&2
-  return 1
-}
-
-stop_mock_nav() {
-  if [ -n "$MOCK_PID" ]; then
-    kill -INT "$MOCK_PID" 2>/dev/null || true
-    sleep 1
-    kill -KILL "$MOCK_PID" 2>/dev/null || true
-    MOCK_PID=""
-  fi
-  pkill -KILL -f mock_navigate_to_pose_server 2>/dev/null || true
-  sleep 1
-}
-
 start_server() {
   pkill -KILL -f sentry_behavior_server 2>/dev/null || true
-  sleep 1
-  RCUTILS_LOGGING_BUFFERED_STREAM=0 \
-    ros2 run sentry_behavior sentry_behavior_server \
-    --ros-args --params-file "$SRV_YAML" \
-    > "$SERVER_LOG" 2>&1 &
-  SERVER_PID=$!
-  sleep 5
-  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-    echo "[ERR] server did not stay up; log tail:" >&2
-    tail -20 "$SERVER_LOG" >&2
-    return 1
-  fi
+  local attempt
+  for attempt in 1 2 3; do
+    sleep 2
+    RCUTILS_LOGGING_BUFFERED_STREAM=0 \
+      ros2 run sentry_behavior sentry_behavior_server \
+      --ros-args --params-file "$SRV_YAML" \
+      > "$SERVER_LOG" 2>&1 &
+    SERVER_PID=$!
+    local waited
+    for waited in 1 2 3 4 5 6 7 8 9 10; do
+      sleep 1
+      if kill -0 "$SERVER_PID" 2>/dev/null && grep -q "Starting Action Server" "$SERVER_LOG" 2>/dev/null; then
+        return 0
+      fi
+      kill -0 "$SERVER_PID" 2>/dev/null || break
+    done
+    echo "[WARN] server start attempt $attempt not ready, retrying:" >&2
+    tail -5 "$SERVER_LOG" >&2
+    kill -KILL "$SERVER_PID" 2>/dev/null || true
+    pkill -KILL -f sentry_behavior_server 2>/dev/null || true
+    SERVER_PID=""
+  done
+  echo "[ERR] server did not stay up after retries; log tail:" >&2
+  tail -20 "$SERVER_LOG" >&2
+  return 1
 }
 
 stop_server() {
@@ -139,12 +137,13 @@ stop_server() {
   sleep 1
 }
 
-# 用 Python rclpy 发 5 条 (5Hz). ros2 topic pub CLI 在 jazzy 对带中文注释
-# 的 rm_interfaces .msg 解析会触发 rosidl_adapter 内部 bug, 改走 rclpy 兜底.
+# 用 Python rclpy 发裁判数据 (ros2 topic pub CLI 在 jazzy 对带中文注释的 rm_interfaces
+# .msg 解析会触发 rosidl_adapter 内部 bug, 改走 rclpy 兜底). 服务端订阅回调把消息写入
+# 全局 blackboard, 值会一直 latch 到下一条覆盖, 故一过性发布即可持续生效.
 pub_game_status() {
   local progress="$1"
   python3 "$REPO_ROOT/tests/pub_referee.py" game \
-    --progress "$progress" --remain 200 --rate-hz 5 --count 5 \
+    --progress "$progress" --remain 200 --rate-hz 5 --count 8 \
     > /dev/null 2>&1 &
   disown
 }
@@ -152,90 +151,91 @@ pub_game_status() {
 pub_robot_status() {
   local hp="$1"; local ammo="$2"
   python3 "$REPO_ROOT/tests/pub_referee.py" robot \
-    --hp "$hp" --ammo "$ammo" --rate-hz 5 --count 5 \
+    --hp "$hp" --ammo "$ammo" --rate-hz 5 --count 8 \
     > /dev/null 2>&1 &
   disown
 }
 
-# 启 BT 异步，把 action result 写到 $1
+# 启 BT 异步 (执行 rmuc_defend), 把 action result 写到 $1. rmuc_defend 是多场永循环,
+# action 不会自然返回, 用例窗口结束后由调用方 kill 客户端; 各用例之间 restart server.
 send_bt_goal_async() {
   local outfile="$1"
   ros2 action send_goal /sentry_behavior btcpp_ros2_interfaces/action/ExecuteTree \
-    '{target_tree: "rmuc_2026_sentry"}' > "$outfile" 2>&1 &
+    '{target_tree: "rmuc_defend"}' > "$outfile" 2>&1 &
   echo $!
 }
 
-# 抓 mock NavigateToPose server 收到的 goal 序列, 相邻完全相同坐标折叠成 1 行
-# (Stage 4 起 BT 不再 publish /goal_pose, 改为调 nav2 NavigateToPose action,
-# mock server 把每个 goal 打到 stdout 即 MOCK_LOG)
-# 实现: 先记录起始行号, sleep N 秒, 再读 mock log 这段范围. 调用方可
-# 在 sleep 期间并行做 publish/send_goal/state-change.
+# 从 /goal_pose TOPIC 抓 PubGoal 发出的 PoseStamped 坐标序列.
+# 用显式类型 echo, 可在 publisher 尚未创建时就挂上订阅 (PubGoal 会重发直到有订阅者).
+# 解析每个消息块的 x/y -> "%.2f,%.2f", 相邻完全相同坐标折叠成 1 行 (与旧实现 dedup 一致).
+# 设计: 本函数被调用方以 `&` 后台启动, 它"先"起 echo 再 sleep N 秒; 调用方在 sleep 期间
+# 并行做 referee 注入 / send_goal / 状态切换, 从而保证 echo 早于任何 goal publish 挂上.
 capture_goal_pose() {
   local seconds="$1"
   local outfile="$2"
   local raw_file="${outfile%.txt}_raw.txt"
-
-  local start_lineno
-  start_lineno=$(wc -l < "$MOCK_LOG" 2>/dev/null | awk '{print $1+0}')
-  : "${start_lineno:=0}"
+  : > "$raw_file"
+  : > "$outfile"
+  PYTHONUNBUFFERED=1 stdbuf -oL -eL \
+    ros2 topic echo /goal_pose geometry_msgs/msg/PoseStamped --field pose.position \
+    > "$raw_file" 2>/dev/null &
+  local echo_pid=$!
+  ECHO_PID="$echo_pid"
   sleep "$seconds"
-  local end_lineno
-  end_lineno=$(wc -l < "$MOCK_LOG" 2>/dev/null | awk '{print $1+0}')
-  : "${end_lineno:=0}"
-  if [ "$end_lineno" -le "$start_lineno" ]; then
-    : > "$outfile"
-    : > "$raw_file"
-    return 0
-  fi
-  awk -v from="$((start_lineno + 1))" -v to="$end_lineno" -v raw="$raw_file" '
-    NR >= from && NR <= to && /\[MOCK\] received goal/ {
-      x = ""; y = ""
-      for (i=1; i<=NF; i++) {
-        if ($i ~ /^x=/) x = substr($i, 3)
-        else if ($i ~ /^y=/) y = substr($i, 3)
-      }
-      if (x != "" && y != "") {
-        cur = sprintf("%.2f,%.2f", x, y)
-        print cur > raw
+  kill -INT "$echo_pid" 2>/dev/null || true
+  sleep 0.3
+  kill -KILL "$echo_pid" 2>/dev/null || true
+  wait "$echo_pid" 2>/dev/null || true
+  ECHO_PID=""
+  # `ros2 topic echo --field pose.position` 输出形如:
+  #   x: 3.71
+  #   y: -0.61
+  #   z: 0.0
+  #   ---
+  awk '
+    /^[[:space:]]*x:/ { x = $2 + 0; have_x = 1; next }
+    /^[[:space:]]*y:/ {
+      if (have_x) {
+        cur = sprintf("%.2f,%.2f", x, $2 + 0)
         if (cur != last) { print cur; last = cur }
+        have_x = 0
       }
+      next
     }
-    END { close(raw) }
-  ' "$MOCK_LOG" > "$outfile"
+  ' "$raw_file" > "$outfile"
 }
 
-assert_eq_or_diff() {
-  local case_id="$1"
-  local current="$2"
-  local expected_text="$3"
-  local logfile="$RESULT_DIR/inv_${case_id}.log"
-  cp "$current" "$logfile"
-
+# regress / baseline 模式公共处理: 处理则计分并返回 0; run 模式返回 1 让调用方继续断言.
+_diff_modes() {
+  local case_id="$1"; local logfile="$2"
   if [ "$MODE" = "regress" ]; then
     local baseline="$BASELINE_DIR/inv_${case_id}.log"
     if [ ! -f "$baseline" ]; then
       echo "[FAIL] $case_id: baseline missing $baseline"
-      FAIL_COUNT=$((FAIL_COUNT+1))
-      return
+      FAIL_COUNT=$((FAIL_COUNT+1)); return 0
     fi
     if diff -q "$logfile" "$baseline" > /dev/null; then
-      echo "[PASS] $case_id (regress diff clean)"
-      PASS_COUNT=$((PASS_COUNT+1))
+      echo "[PASS] $case_id (regress diff clean)"; PASS_COUNT=$((PASS_COUNT+1))
     else
-      echo "[FAIL] $case_id (regress diff):"
-      diff -u "$baseline" "$logfile" | head -20
+      echo "[FAIL] $case_id (regress diff):"; diff -u "$baseline" "$logfile" | head -20
       FAIL_COUNT=$((FAIL_COUNT+1))
     fi
-    return
+    return 0
   fi
-
   if [ "$MODE" = "baseline" ]; then
     local n; n=$(wc -l < "$logfile")
     echo "[REC]  $case_id recorded $n lines (head: $(head -1 "$logfile" 2>/dev/null))"
-    PASS_COUNT=$((PASS_COUNT+1))
-    return
+    PASS_COUNT=$((PASS_COUNT+1)); return 0
   fi
+  return 1
+}
 
+# 断言 goal 序列中匹配到给定正则 (单坐标用例)
+assert_eq_or_diff() {
+  local case_id="$1"; local current="$2"; local expected_text="$3"
+  local logfile="$RESULT_DIR/inv_${case_id}.log"
+  cp "$current" "$logfile"
+  _diff_modes "$case_id" "$logfile" && return
   if grep -qE "$expected_text" "$current"; then
     echo "[PASS] $case_id matched: $expected_text"
     PASS_COUNT=$((PASS_COUNT+1))
@@ -246,37 +246,12 @@ assert_eq_or_diff() {
   fi
 }
 
+# 断言 goal 序列为空 (无 /goal_pose)
 assert_empty_or_diff() {
-  local case_id="$1"
-  local current="$2"
+  local case_id="$1"; local current="$2"
   local logfile="$RESULT_DIR/inv_${case_id}.log"
   cp "$current" "$logfile"
-
-  if [ "$MODE" = "regress" ]; then
-    local baseline="$BASELINE_DIR/inv_${case_id}.log"
-    if [ ! -f "$baseline" ]; then
-      echo "[FAIL] $case_id: baseline missing $baseline"
-      FAIL_COUNT=$((FAIL_COUNT+1))
-      return
-    fi
-    if diff -q "$logfile" "$baseline" > /dev/null; then
-      echo "[PASS] $case_id (regress diff clean)"
-      PASS_COUNT=$((PASS_COUNT+1))
-    else
-      echo "[FAIL] $case_id (regress diff):"
-      diff -u "$baseline" "$logfile" | head -20
-      FAIL_COUNT=$((FAIL_COUNT+1))
-    fi
-    return
-  fi
-
-  if [ "$MODE" = "baseline" ]; then
-    local n; n=$(wc -l < "$logfile")
-    echo "[REC]  $case_id recorded $n lines (expect empty)"
-    PASS_COUNT=$((PASS_COUNT+1))
-    return
-  fi
-
+  _diff_modes "$case_id" "$logfile" && return
   if [ ! -s "$current" ]; then
     echo "[PASS] $case_id no goal_pose (file empty)"
     PASS_COUNT=$((PASS_COUNT+1))
@@ -287,214 +262,199 @@ assert_empty_or_diff() {
   fi
 }
 
+# 断言给定坐标按顺序作为子序列出现 (允许中间夹其它行; 多坐标流转用例)
+assert_subseq_or_diff() {
+  local case_id="$1"; local current="$2"; shift 2
+  local logfile="$RESULT_DIR/inv_${case_id}.log"
+  cp "$current" "$logfile"
+  _diff_modes "$case_id" "$logfile" && return
+  local -a want=( "$@" )
+  local wi=0
+  local line
+  while IFS= read -r line; do
+    if [ "$wi" -lt "${#want[@]}" ] && [ "$line" = "${want[$wi]}" ]; then
+      wi=$((wi+1))
+    fi
+  done < "$current"
+  if [ "$wi" -ge "${#want[@]}" ]; then
+    echo "[PASS] $case_id ordered subsequence: ${want[*]}"
+    PASS_COUNT=$((PASS_COUNT+1))
+  else
+    echo "[FAIL] $case_id expected ordered subsequence [${want[*]}] but got:"
+    cat "$current"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+  fi
+}
+
+# 断言 present 坐标出现 且 absent 坐标不出现 (比赛结束 halt 用例)
+assert_present_absent_or_diff() {
+  local case_id="$1"; local current="$2"; local present="$3"; local absent="$4"
+  local logfile="$RESULT_DIR/inv_${case_id}.log"
+  cp "$current" "$logfile"
+  _diff_modes "$case_id" "$logfile" && return
+  if grep -qxF -e "$present" "$current" && ! grep -qxF -e "$absent" "$current"; then
+    echo "[PASS] $case_id present='$present' absent='$absent'"
+    PASS_COUNT=$((PASS_COUNT+1))
+  else
+    echo "[FAIL] $case_id expected present='$present' & absent='$absent' but got:"
+    cat "$current"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+  fi
+}
+
 run_case_inv1() {
-  echo "=== INV-1: 阶段 != 4 时 BT 整树 FAILURE 不发 goal ==="
+  echo "=== INV-1: game_progress != 4 -> 等比赛开始, 不发 /goal_pose ==="
   local goal_log="$WORK_DIR/_inv1_goal.txt"
-  capture_goal_pose 4 "$goal_log" &
+  capture_goal_pose 7 "$goal_log" &
   local cap_pid=$!
+  sleep 1.5
+  pub_game_status 2          # 非比赛中阶段
+  pub_robot_status 300 100   # 即便状态健康, 也不该发 goal
   sleep 1
-  pub_game_status 2
-  pub_robot_status 300 100
   local act_log="$WORK_DIR/_inv1_act.txt"
   local apid; apid=$(send_bt_goal_async "$act_log")
-  sleep 3
   wait "$cap_pid" 2>/dev/null || true
+  kill -INT "$apid" 2>/dev/null || true
   wait "$apid" 2>/dev/null || true
   assert_empty_or_diff "1" "$goal_log"
 }
 
 run_case_inv2() {
-  echo "=== INV-2: 阶段 4 + ammo>0 + hp>=150 → goal=(5.90, 4.15) ==="
+  echo "=== INV-2: progress=4 + hp=300 + ammo=100 -> 驻守防守点 ($DEFEND) ==="
+  local goal_log="$WORK_DIR/_inv2_goal.txt"
+  capture_goal_pose 10 "$goal_log" &
+  local cap_pid=$!
+  sleep 1.5
   pub_game_status 4
   pub_robot_status 300 100
-  local goal_log="$WORK_DIR/_inv2_goal.txt"
-  # ReactiveSequence 根节点 + referee publisher discovery 1.5s + nav2
-  # send_goal wait 上限, 总窗口给 8s 留 BT 第一次成功 createTree 与发 goal
-  capture_goal_pose 8 "$goal_log" &
-  local cap_pid=$!
-  sleep 1
+  sleep 2
   local act_log="$WORK_DIR/_inv2_act.txt"
   local apid; apid=$(send_bt_goal_async "$act_log")
-  sleep 6
-  kill -INT "$apid" 2>/dev/null || true
   wait "$cap_pid" 2>/dev/null || true
+  kill -INT "$apid" 2>/dev/null || true
   wait "$apid" 2>/dev/null || true
-  assert_eq_or_diff "2" "$goal_log" "^5\\.9[0-9]*,4\\.1[0-9]*$"
+  assert_eq_or_diff "2" "$goal_log" "$DEFEND_RE"
 }
 
 run_case_inv3() {
-  echo "=== INV-3: 弹丸=0 时切到补给区 (-0.94, -5.01) ==="
+  echo "=== INV-3: progress=4 + ammo=0 -> 切到补给点 ($SUPPLY) ==="
+  local goal_log="$WORK_DIR/_inv3_goal.txt"
+  capture_goal_pose 10 "$goal_log" &
+  local cap_pid=$!
+  sleep 1.5
   pub_game_status 4
   pub_robot_status 300 0
-  local goal_log="$WORK_DIR/_inv3_goal.txt"
-  capture_goal_pose 8 "$goal_log" &
-  local cap_pid=$!
-  sleep 1
+  sleep 2
   local act_log="$WORK_DIR/_inv3_act.txt"
   local apid; apid=$(send_bt_goal_async "$act_log")
-  sleep 6
-  kill -INT "$apid" 2>/dev/null || true
   wait "$cap_pid" 2>/dev/null || true
+  kill -INT "$apid" 2>/dev/null || true
   wait "$apid" 2>/dev/null || true
-  assert_eq_or_diff "3" "$goal_log" "^-0\\.9[0-9]*,-5\\.0[0-9]*$"
+  assert_eq_or_diff "3" "$goal_log" "$SUPPLY_RE"
 }
 
 run_case_inv4() {
-  echo "=== INV-4: 阶段一首点 → 弹尽撤补 → 满载进阶段二 ==="
-  # 该用例触发完整三段流转，期望序列至少包含 (5.90,4.15) → (-0.94,-5.01) → (5.56,-3.02)
-  # ReactiveSequence 根 + referee discovery 给首段 ~5s, 后续状态切换各留 5s
-  pub_game_status 4
-  pub_robot_status 300 100   # 阶段一首点
+  echo "=== INV-4: 守点 -> 弹尽回补 -> 恢复返回守点 (DEFEND -> SUPPLY -> DEFEND) ==="
   local goal_log="$WORK_DIR/_inv4_goal.txt"
-  capture_goal_pose 16 "$goal_log" &
+  capture_goal_pose 24 "$goal_log" &
   local cap_pid=$!
-  sleep 1
+  sleep 1.5
+  pub_game_status 4
+  pub_robot_status 300 100    # 守点
+  sleep 2
   local act_log="$WORK_DIR/_inv4_act.txt"
   local apid; apid=$(send_bt_goal_async "$act_log")
-  sleep 5
-  pub_robot_status 300 0     # 弹尽 → 离开首点
-  sleep 5
-  pub_robot_status 400 100   # 补满 → 离开补给区 → 阶段二次点
-  sleep 5
-  kill -INT "$apid" 2>/dev/null || true
+  sleep 6
+  pub_robot_status 300 0      # 弹尽 -> 回补给
+  sleep 6
+  pub_robot_status 400 100    # 补满/恢复 -> 返回守点
+  sleep 6
   wait "$cap_pid" 2>/dev/null || true
+  kill -INT "$apid" 2>/dev/null || true
   wait "$apid" 2>/dev/null || true
-  local logfile="$RESULT_DIR/inv_4.log"
-  cp "$goal_log" "$logfile"
-  # INV-4 阶段切换依赖 publisher 时序 / QoS, mock 模式下 fire-and-forget
-  # publisher 与 BT NavigateTo 时间窗口耦合, 输出抖动 (1~3 行).
-  # 不走 strict diff, 宽松判定: 必须看到 (5.90,4.15) 首点.
-  if [ "$MODE" = "baseline" ]; then
-    echo "[REC]  4 recorded $(wc -l < "$logfile") lines (head: $(head -1 "$logfile"))"
-    PASS_COUNT=$((PASS_COUNT+1))
-    return
-  fi
-  if grep -qE "^5\\.9[0-9]*,4\\.1[0-9]*$" "$logfile"; then
-    echo "[PASS] 4 saw 阶段一首点 (宽松判定)"
-    PASS_COUNT=$((PASS_COUNT+1))
-  else
-    echo "[FAIL] 4 missing 阶段一首点 (5.90,4.15):"
-    cat "$logfile"
-    FAIL_COUNT=$((FAIL_COUNT+1))
-  fi
+  assert_subseq_or_diff "4" "$goal_log" "$DEFEND" "$SUPPLY" "$DEFEND"
 }
 
 run_case_inv5() {
-  echo "=== INV-5: 阶段二驻守 → hp<150 → 回补给 ==="
-  # ReactiveSequence 根首段 ~5s + 状态切换 5/7/12s
-  pub_game_status 4
-  pub_robot_status 300 100
+  echo "=== INV-5: 守点 -> hp<=150 -> 回补给 (DEFEND -> SUPPLY) ==="
   local goal_log="$WORK_DIR/_inv5_goal.txt"
-  capture_goal_pose 35 "$goal_log" &
+  capture_goal_pose 18 "$goal_log" &
   local cap_pid=$!
-  sleep 1
+  sleep 1.5
+  pub_game_status 4
+  pub_robot_status 300 100    # 守点
+  sleep 2
   local act_log="$WORK_DIR/_inv5_act.txt"
   local apid; apid=$(send_bt_goal_async "$act_log")
   sleep 6
-  pub_robot_status 300 0    # 阶段一弹尽
+  pub_robot_status 100 100    # 低血 (hp<=150) -> 回补给
   sleep 6
-  pub_robot_status 400 100  # 补满 → 阶段二次点
-  sleep 8
-  pub_robot_status 100 100  # 阶段二驻守期 hp<150 → 触发 WhileDoElse else 分支
-  sleep 12
-  kill -INT "$apid" 2>/dev/null || true
   wait "$cap_pid" 2>/dev/null || true
+  kill -INT "$apid" 2>/dev/null || true
   wait "$apid" 2>/dev/null || true
-  local logfile="$RESULT_DIR/inv_5.log"
-  cp "$goal_log" "$logfile"
-  # INV-5 阶段切换链路依赖 mock 时序+QoS, 输出在 1~3 行间抖动
-  # (`5.90,4.15` 必出, `-0.94,-5.01` / `5.56,-3.02` 视 publisher 时序而定).
-  # 不走 strict diff, 用宽松判定: 至少看到首点驻守的 (5.90,4.15).
-  # 真仿真 / 实车场景 referee 持续 publish 不存在该耦合.
-  if [ "$MODE" = "baseline" ]; then
-    echo "[REC]  5 recorded $(wc -l < "$logfile") lines (head: $(head -1 "$logfile"))"
-    PASS_COUNT=$((PASS_COUNT+1))
-    return
-  fi
-  if grep -qE "^5\\.9[0-9]*,4\\.1[0-9]*$" "$logfile"; then
-    echo "[PASS] 5 saw 阶段一首点 (宽松判定)"
-    PASS_COUNT=$((PASS_COUNT+1))
-  else
-    echo "[FAIL] 5 missing 阶段一首点 (5.90,4.15):"
-    cat "$logfile"
-    FAIL_COUNT=$((FAIL_COUNT+1))
-  fi
+  assert_subseq_or_diff "5" "$goal_log" "$DEFEND" "$SUPPLY"
 }
 
 run_case_inv6() {
-  echo "=== INV-6: game_progress=5（结束）→ BT FAILURE / ABORTED ==="
-  pub_game_status 5
-  pub_robot_status 300 100
+  echo "=== INV-6: 比赛结束 (progress 4->5) 停止主决策, 战术状态变化被忽略 ==="
+  # 先在比赛中拿到 DEFEND, 再 progress=5 结束比赛 -> 主决策被 ReactiveFallback 的
+  # Inverter 短路 halt, 外层重置回"等下一场". 随后注入 ammo=0 (比赛中本会切 SUPPLY)
+  # 用以证明主决策确已停止: SUPPLY 绝不应出现. rmuc_defend 结束时不返回 ABORTED
+  # (循环等下一场), 故不断言 action result, 改断言 goal 流 halt.
   local goal_log="$WORK_DIR/_inv6_goal.txt"
-  capture_goal_pose 3 "$goal_log" &
+  capture_goal_pose 18 "$goal_log" &
   local cap_pid=$!
-  sleep 1
+  sleep 1.5
+  pub_game_status 4
+  pub_robot_status 300 100
+  sleep 2
   local act_log="$WORK_DIR/_inv6_act.txt"
   local apid; apid=$(send_bt_goal_async "$act_log")
-  sleep 2
+  sleep 6                     # 比赛中: 抓到 DEFEND
+  pub_game_status 5           # 比赛结束 -> 停止主决策
+  sleep 3                     # 等 halt 生效
+  pub_robot_status 300 0      # 比赛中本会触发 SUPPLY; 已结束应被忽略
+  sleep 4                     # 观察窗口: 不应出现新 goal
   wait "$cap_pid" 2>/dev/null || true
+  kill -INT "$apid" 2>/dev/null || true
   wait "$apid" 2>/dev/null || true
-  # 归一化 action 输出: 去掉随机 UUID, 仅保留语义骨架
-  sed -E 's/[0-9a-f]{8,}/<UUID>/g' "$act_log" \
-    | grep -E "Goal accepted|status:|return_message|Goal finished" \
-    > "$RESULT_DIR/inv_6.log"
-  if [ "$MODE" = "regress" ]; then
-    if diff -q "$RESULT_DIR/inv_6.log" "$BASELINE_DIR/inv_6.log" > /dev/null; then
-      echo "[PASS] 6 (regress)"
-      PASS_COUNT=$((PASS_COUNT+1))
-    else
-      echo "[FAIL] 6 (regress):"
-      diff -u "$BASELINE_DIR/inv_6.log" "$RESULT_DIR/inv_6.log" | head -10
-      FAIL_COUNT=$((FAIL_COUNT+1))
-    fi
-  elif [ "$MODE" = "baseline" ]; then
-    echo "[REC]  6 normalized $(wc -l < "$RESULT_DIR/inv_6.log") lines"
-    PASS_COUNT=$((PASS_COUNT+1))
-  else
-    if grep -qE "ABORTED|FAILURE" "$act_log"; then
-      echo "[PASS] 6 saw ABORTED/FAILURE"
-      PASS_COUNT=$((PASS_COUNT+1))
-    else
-      echo "[FAIL] 6 unexpected action result:"
-      head -10 "$act_log"
-      FAIL_COUNT=$((FAIL_COUNT+1))
-    fi
-  fi
+  assert_present_absent_or_diff "6" "$goal_log" "$DEFEND" "$SUPPLY"
 }
 
 run_case_inv7() {
-  echo "=== INV-7: server 重启后能继续接受 goal ==="
+  echo "=== INV-7: server 重启后仍能执行决策并发守点 ($DEFEND) ==="
   stop_server
   start_server || { echo "[FAIL] 7 server restart"; FAIL_COUNT=$((FAIL_COUNT+1)); return; }
+  local goal_log="$WORK_DIR/_inv7_goal.txt"
+  capture_goal_pose 10 "$goal_log" &
+  local cap_pid=$!
+  sleep 1.5
   pub_game_status 4
   pub_robot_status 300 100
-  local goal_log="$WORK_DIR/_inv7_goal.txt"
-  capture_goal_pose 8 "$goal_log" &
-  local cap_pid=$!
-  sleep 1
+  sleep 2
   local act_log="$WORK_DIR/_inv7_act.txt"
   local apid; apid=$(send_bt_goal_async "$act_log")
-  sleep 6
-  kill -INT "$apid" 2>/dev/null || true
   wait "$cap_pid" 2>/dev/null || true
+  kill -INT "$apid" 2>/dev/null || true
   wait "$apid" 2>/dev/null || true
-  assert_eq_or_diff "7" "$goal_log" "^5\\.9[0-9]*,4\\.1[0-9]*$"
+  assert_eq_or_diff "7" "$goal_log" "$DEFEND_RE"
 }
 
 # Main
 echo "Mode: $MODE; Work: $WORK_DIR"
-start_mock_nav || exit 99
+# 每个用例前 restart server: 重置进程级 PubGoal 去重状态 (g_last_goal_per_topic) 与
+# blackboard, 保证用例之间互不串扰 (否则上一用例 publish 过的坐标会被去重屏蔽).
 start_server || exit 99
 run_case_inv1
-stop_server; stop_mock_nav; start_mock_nav || exit 99; start_server || exit 99
+stop_server; start_server || exit 99
 run_case_inv2
-stop_server; stop_mock_nav; start_mock_nav || exit 99; start_server || exit 99
+stop_server; start_server || exit 99
 run_case_inv3
-stop_server; stop_mock_nav; start_mock_nav || exit 99; start_server || exit 99
+stop_server; start_server || exit 99
 run_case_inv4
-stop_server; stop_mock_nav; start_mock_nav || exit 99; start_server || exit 99
+stop_server; start_server || exit 99
 run_case_inv5
-stop_server; stop_mock_nav; start_mock_nav || exit 99; start_server || exit 99
+stop_server; start_server || exit 99
 run_case_inv6
 run_case_inv7
 

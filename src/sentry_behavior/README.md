@@ -172,17 +172,17 @@ btviz   # Connect → tcp://127.0.0.1:1667
 
 ## 回归测试
 
-`tests/inv_smoke.sh` 启动 mock NavigateToPose action server + `sentry_behavior_server`，注入裁判数据，校验 `/goal_pose` 序列和 action result，验证 7 条行为不变量：
+`tests/inv_smoke.sh` 启动 `sentry_behavior_server` 并以 `target_tree=rmuc_defend` 执行守家树，注入裁判数据，从 `/goal_pose` topic 抓 `PubGoal` 发出的坐标序列，验证 7 条行为不变量：
 
 | INV | 描述 |
 |---|---|
-| INV-1 | `game_progress != 4` 时 BT 不发 goal |
-| INV-2 | `progress=4` + `ammo>0` + `hp≥300` → 发攻击点坐标 |
-| INV-3 | `ammo=0` → 切到补给点 |
-| INV-4 | 阶段一首点 → 弹尽撤补 → 满载进阶段二（三段流转） |
-| INV-5 | 阶段二驻守 → `hp<150` → 回补给 |
-| INV-6 | `game_progress=5`（结束） → BT FAILURE/ABORTED |
-| INV-7 | server 重启后能继续接受新 goal |
+| INV-1 | `game_progress != 4`（未开赛）→ 等待，不发 `/goal_pose` |
+| INV-2 | `progress=4` + `hp>150` + `ammo>0` → 驻守防守点 `(3.71, -0.61)` |
+| INV-3 | `progress=4` + `ammo=0` → 切到补给点 `(-0.27, -3.94)` |
+| INV-4 | 守点 → 弹尽回补 → 补满恢复返回守点（`(3.71,-0.61)→(-0.27,-3.94)→(3.71,-0.61)` 滞回） |
+| INV-5 | 守点 → `hp≤150` → 回补给 `(-0.27, -3.94)` |
+| INV-6 | 比赛结束（`progress` 4→5）→ 停止主决策（守点已发、补给不再出现） |
+| INV-7 | server 重启后仍能执行决策并发守点 `(3.71, -0.61)` |
 
 ```bash
 source install/setup.bash
@@ -197,7 +197,7 @@ tests/inv_smoke.sh --baseline tests/baseline
 tests/inv_smoke.sh --regress tests/baseline
 ```
 
-> **注意**：脚本以 `target_tree: "rmuc_2026_sentry"` 发送 goal，为历史遗留名，与当前 `RMUC.xml` 中 ID `rmuc_defend` 不符。INV-1 测 `game_progress != 4` 时不发 goal，与树名无关，始终有效。
+> **注意**：`rmuc_defend` 用 `PubGoal` 发布到 `/goal_pose`（非 NavigateToPose action），脚本据此从 `/goal_pose` topic 抓坐标。断言坐标取自 `RMUC.xml`（守点 `(3.71, -0.61)`、补给 `(-0.27, -3.94)`）——改动树坐标或树名需同步更新本脚本断言。
 
 ## 目录结构
 
