@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# RMUC.xml (BehaviorTree ID = rmuc_defend) 决策树 INV-1~7 行为不变量回归脚本
+# sentry_behavior_node (strategy = rmuc_defend) 决策 INV-1~7 行为不变量回归脚本
 #
-# rmuc_defend 守家逻辑 (见 RMUC.xml):
-#   - 比赛中 (game_progress==4) 且 HP>150 且 ammo>0  -> 驻守防守点 DEFEND=(3.71, -0.61)
-#   - HP<=150 或 ammo==0                              -> 回补给点 SUPPLY=(-0.27, -3.94)
-#   - 补满 (HP>=400 且 ammo>=50) / 状态恢复            -> 返回防守点 DEFEND=(3.71, -0.61)
-#   - game_progress 离开 4 (比赛结束) -> 停止主决策, 外层重置等下一场
+# rmuc_defend 守家逻辑 (无状态互补 guard, 见 strategies.cpp / 方案 §2):
+#   - 比赛中 (game_progress==4) 且 hp>=151 且 ammo>=1  -> 驻守防守点 DEFEND=(3.71, -0.61)
+#   - 否则 (hp<=150 或 ammo==0)                         -> 回补给点 SUPPLY=(-0.27, -3.94)
+#   - game_progress 离开 4 (比赛结束) -> 转 WAIT_START 静默, 等下一场
 #
-# 目标投递机制: rmuc_defend 用 PubGoal (BT::SyncActionNode) 把 geometry_msgs/PoseStamped
-# publish 到 /goal_pose topic (并非调用 NavigateToPose action). PubGoal 在无订阅者时每
-# tick 重发并打 "0 subscribers, will retry next tick" warning, 等订阅者出现再交付. 因此
-# 抓取必须在注入裁判/目标"之前"就用显式类型挂上订阅 (否则 publisher 尚未创建时
+# 目标投递机制: sentry_behavior_node 把 geometry_msgs/PoseStamped publish 到 /goal_pose
+# (Nav2 bt_navigator 消费). GoalPublisher 在无订阅者时每 tick 重发, 等订阅者出现再 latch.
+# 因此抓取必须在注入裁判数据"之前"就用显式类型挂上订阅 (否则 publisher 尚未创建时
 # `ros2 topic echo /goal_pose` 会报 "could not determine type").
+#
+# 节点启动即运行决策 (无 action 握手), 用 -p strategy:=rmuc_defend 选择策略.
 #
 # Usage:
 #   tests/inv_smoke.sh                          # 跑 7 个用例, 仅 echo PASS/FAIL, exit = FAIL 数
@@ -28,7 +28,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPO_ROOT="$( dirname "$SCRIPT_DIR" )"
 SHARE="$REPO_ROOT/install/sentry_behavior/share/sentry_behavior"
 
-# rmuc_defend 战术坐标 (来自 RMUC.xml)
+# rmuc_defend 战术坐标 (来自 strategies.cpp)
 DEFEND='3.71,-0.61'
 SUPPLY='-0.27,-3.94'
 DEFEND_RE='^3\.71,-0\.61$'
@@ -57,8 +57,7 @@ else
   RESULT_DIR="$WORK_DIR"
 fi
 
-SRV_YAML="$WORK_DIR/srv.yaml"
-SERVER_LOG="$WORK_DIR/server.log"
+SERVER_LOG="$WORK_DIR/node.log"
 SERVER_PID=""
 ECHO_PID=""
 PASS_COUNT=0
@@ -73,55 +72,40 @@ cleanup() {
     sleep 1
     kill -KILL "$SERVER_PID" 2>/dev/null || true
   fi
-  pkill -KILL -f sentry_behavior_server 2>/dev/null || true
+  pkill -KILL -f sentry_behavior_node 2>/dev/null || true
   pkill -KILL -f "ros2 topic echo /goal_pose" 2>/dev/null || true
-  pkill -KILL -f "ros2 action send_goal /sentry_behavior" 2>/dev/null || true
   pkill -KILL -f "pub_referee.py" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
-# tick_frequency 设高一点 (10Hz) 让 reactive 决策切换 + PubGoal "等订阅者后重发"
-# 节拍更紧凑; 这是测试专用 srv.yaml, 与生产 params/sentry_behavior.yaml 无关.
-cat > "$SRV_YAML" <<EOF
-bt_action_server:
-  ros__parameters:
-    use_sim_time: false
-    action_name: sentry_behavior
-    tick_frequency: 10
-    groot2_port: 1667
-    ros_plugins_timeout: 1000
-    use_cout_logger: false
-    plugins:
-      - sentry_behavior/bt_plugins
-    behavior_trees:
-      - sentry_behavior/behavior_trees
-EOF
-
+# 启 sentry_behavior_node (执行 rmuc_defend), 参数经 --ros-args -p 注入 (无 params 文件).
+# tick_frequency 设高一点 (10Hz) 让 reactive 决策切换 + GoalPublisher "等订阅者后重发"
+# 节拍更紧凑; 与生产 params/sentry_behavior.yaml 无关.
 start_server() {
-  pkill -KILL -f sentry_behavior_server 2>/dev/null || true
+  pkill -KILL -f sentry_behavior_node 2>/dev/null || true
   local attempt
   for attempt in 1 2 3; do
     sleep 2
     RCUTILS_LOGGING_BUFFERED_STREAM=0 \
-      ros2 run sentry_behavior sentry_behavior_server \
-      --ros-args --params-file "$SRV_YAML" \
+      ros2 run sentry_behavior sentry_behavior_node \
+      --ros-args -p strategy:=rmuc_defend -p tick_frequency:=10.0 -p use_sim_time:=false \
       > "$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
     local waited
     for waited in 1 2 3 4 5 6 7 8 9 10; do
       sleep 1
-      if kill -0 "$SERVER_PID" 2>/dev/null && grep -q "Starting Action Server" "$SERVER_LOG" 2>/dev/null; then
+      if kill -0 "$SERVER_PID" 2>/dev/null && grep -q "sentry_behavior_node ready" "$SERVER_LOG" 2>/dev/null; then
         return 0
       fi
       kill -0 "$SERVER_PID" 2>/dev/null || break
     done
-    echo "[WARN] server start attempt $attempt not ready, retrying:" >&2
+    echo "[WARN] node start attempt $attempt not ready, retrying:" >&2
     tail -5 "$SERVER_LOG" >&2
     kill -KILL "$SERVER_PID" 2>/dev/null || true
-    pkill -KILL -f sentry_behavior_server 2>/dev/null || true
+    pkill -KILL -f sentry_behavior_node 2>/dev/null || true
     SERVER_PID=""
   done
-  echo "[ERR] server did not stay up after retries; log tail:" >&2
+  echo "[ERR] node did not stay up after retries; log tail:" >&2
   tail -20 "$SERVER_LOG" >&2
   return 1
 }
@@ -133,13 +117,13 @@ stop_server() {
     kill -KILL "$SERVER_PID" 2>/dev/null || true
     SERVER_PID=""
   fi
-  pkill -KILL -f sentry_behavior_server 2>/dev/null || true
+  pkill -KILL -f sentry_behavior_node 2>/dev/null || true
   sleep 1
 }
 
 # 用 Python rclpy 发裁判数据 (ros2 topic pub CLI 在 jazzy 对带中文注释的 rm_interfaces
-# .msg 解析会触发 rosidl_adapter 内部 bug, 改走 rclpy 兜底). 服务端订阅回调把消息写入
-# 全局 blackboard, 值会一直 latch 到下一条覆盖, 故一过性发布即可持续生效.
+# .msg 解析会触发 rosidl_adapter 内部 bug, 改走 rclpy 兜底). 节点订阅回调把消息写入
+# RefereeSnapshot, 值会一直 latch 到下一条覆盖, 故一过性发布即可持续生效.
 pub_game_status() {
   local progress="$1"
   python3 "$REPO_ROOT/tests/pub_referee.py" game \
@@ -156,20 +140,11 @@ pub_robot_status() {
   disown
 }
 
-# 启 BT 异步 (执行 rmuc_defend), 把 action result 写到 $1. rmuc_defend 是多场永循环,
-# action 不会自然返回, 用例窗口结束后由调用方 kill 客户端; 各用例之间 restart server.
-send_bt_goal_async() {
-  local outfile="$1"
-  ros2 action send_goal /sentry_behavior btcpp_ros2_interfaces/action/ExecuteTree \
-    '{target_tree: "rmuc_defend"}' > "$outfile" 2>&1 &
-  echo $!
-}
-
-# 从 /goal_pose TOPIC 抓 PubGoal 发出的 PoseStamped 坐标序列.
-# 用显式类型 echo, 可在 publisher 尚未创建时就挂上订阅 (PubGoal 会重发直到有订阅者).
-# 解析每个消息块的 x/y -> "%.2f,%.2f", 相邻完全相同坐标折叠成 1 行 (与旧实现 dedup 一致).
+# 从 /goal_pose TOPIC 抓节点发出的 PoseStamped 坐标序列.
+# 用显式类型 echo, 可在 publisher 尚未创建时就挂上订阅 (节点会重发直到有订阅者).
+# 解析每个消息块的 x/y -> "%.2f,%.2f", 相邻完全相同坐标折叠成 1 行 (与去重一致).
 # 设计: 本函数被调用方以 `&` 后台启动, 它"先"起 echo 再 sleep N 秒; 调用方在 sleep 期间
-# 并行做 referee 注入 / send_goal / 状态切换, 从而保证 echo 早于任何 goal publish 挂上.
+# 并行做 referee 注入 / 状态切换, 从而保证 echo 早于任何 goal publish 挂上.
 capture_goal_pose() {
   local seconds="$1"
   local outfile="$2"
@@ -307,143 +282,118 @@ run_case_inv1() {
   local goal_log="$WORK_DIR/_inv1_goal.txt"
   capture_goal_pose 7 "$goal_log" &
   local cap_pid=$!
-  sleep 1.5
-  pub_game_status 2          # 非比赛中阶段
-  pub_robot_status 300 100   # 即便状态健康, 也不该发 goal
   sleep 1
-  local act_log="$WORK_DIR/_inv1_act.txt"
-  local apid; apid=$(send_bt_goal_async "$act_log")
+  pub_robot_status 300 100   # 即便状态健康
+  sleep 3
+  pub_game_status 2          # 非比赛中阶段 -> 不该发 goal
+  sleep 2
   wait "$cap_pid" 2>/dev/null || true
-  kill -INT "$apid" 2>/dev/null || true
-  wait "$apid" 2>/dev/null || true
   assert_empty_or_diff "1" "$goal_log"
 }
 
 run_case_inv2() {
   echo "=== INV-2: progress=4 + hp=300 + ammo=100 -> 驻守防守点 ($DEFEND) ==="
   local goal_log="$WORK_DIR/_inv2_goal.txt"
-  capture_goal_pose 10 "$goal_log" &
+  capture_goal_pose 12 "$goal_log" &
   local cap_pid=$!
-  sleep 1.5
-  pub_game_status 4
+  sleep 1
   pub_robot_status 300 100
-  sleep 2
-  local act_log="$WORK_DIR/_inv2_act.txt"
-  local apid; apid=$(send_bt_goal_async "$act_log")
+  sleep 3
+  pub_game_status 4
+  sleep 4
   wait "$cap_pid" 2>/dev/null || true
-  kill -INT "$apid" 2>/dev/null || true
-  wait "$apid" 2>/dev/null || true
   assert_eq_or_diff "2" "$goal_log" "$DEFEND_RE"
 }
 
 run_case_inv3() {
   echo "=== INV-3: progress=4 + ammo=0 -> 切到补给点 ($SUPPLY) ==="
   local goal_log="$WORK_DIR/_inv3_goal.txt"
-  capture_goal_pose 10 "$goal_log" &
+  capture_goal_pose 12 "$goal_log" &
   local cap_pid=$!
-  sleep 1.5
-  pub_game_status 4
+  sleep 1
   pub_robot_status 300 0
-  sleep 2
-  local act_log="$WORK_DIR/_inv3_act.txt"
-  local apid; apid=$(send_bt_goal_async "$act_log")
+  sleep 3
+  pub_game_status 4
+  sleep 4
   wait "$cap_pid" 2>/dev/null || true
-  kill -INT "$apid" 2>/dev/null || true
-  wait "$apid" 2>/dev/null || true
   assert_eq_or_diff "3" "$goal_log" "$SUPPLY_RE"
 }
 
 run_case_inv4() {
   echo "=== INV-4: 守点 -> 弹尽回补 -> 恢复返回守点 (DEFEND -> SUPPLY -> DEFEND) ==="
   local goal_log="$WORK_DIR/_inv4_goal.txt"
-  capture_goal_pose 24 "$goal_log" &
+  capture_goal_pose 26 "$goal_log" &
   local cap_pid=$!
-  sleep 1.5
-  pub_game_status 4
+  sleep 1
   pub_robot_status 300 100    # 守点
-  sleep 2
-  local act_log="$WORK_DIR/_inv4_act.txt"
-  local apid; apid=$(send_bt_goal_async "$act_log")
-  sleep 6
+  sleep 3
+  pub_game_status 4
+  sleep 5
   pub_robot_status 300 0      # 弹尽 -> 回补给
   sleep 6
   pub_robot_status 400 100    # 补满/恢复 -> 返回守点
   sleep 6
   wait "$cap_pid" 2>/dev/null || true
-  kill -INT "$apid" 2>/dev/null || true
-  wait "$apid" 2>/dev/null || true
   assert_subseq_or_diff "4" "$goal_log" "$DEFEND" "$SUPPLY" "$DEFEND"
 }
 
 run_case_inv5() {
   echo "=== INV-5: 守点 -> hp<=150 -> 回补给 (DEFEND -> SUPPLY) ==="
   local goal_log="$WORK_DIR/_inv5_goal.txt"
-  capture_goal_pose 18 "$goal_log" &
+  capture_goal_pose 20 "$goal_log" &
   local cap_pid=$!
-  sleep 1.5
-  pub_game_status 4
+  sleep 1
   pub_robot_status 300 100    # 守点
-  sleep 2
-  local act_log="$WORK_DIR/_inv5_act.txt"
-  local apid; apid=$(send_bt_goal_async "$act_log")
-  sleep 6
+  sleep 3
+  pub_game_status 4
+  sleep 5
   pub_robot_status 100 100    # 低血 (hp<=150) -> 回补给
   sleep 6
   wait "$cap_pid" 2>/dev/null || true
-  kill -INT "$apid" 2>/dev/null || true
-  wait "$apid" 2>/dev/null || true
   assert_subseq_or_diff "5" "$goal_log" "$DEFEND" "$SUPPLY"
 }
 
 run_case_inv6() {
   echo "=== INV-6: 比赛结束 (progress 4->5) 停止主决策, 战术状态变化被忽略 ==="
-  # 先在比赛中拿到 DEFEND, 再 progress=5 结束比赛 -> 主决策被 ReactiveFallback 的
-  # Inverter 短路 halt, 外层重置回"等下一场". 随后注入 ammo=0 (比赛中本会切 SUPPLY)
-  # 用以证明主决策确已停止: SUPPLY 绝不应出现. rmuc_defend 结束时不返回 ABORTED
-  # (循环等下一场), 故不断言 action result, 改断言 goal 流 halt.
+  # 先在比赛中拿到 DEFEND, 再 progress=5 结束比赛 -> 主决策被生命周期父 guard 抢占,
+  # 转 WAIT_START 静默. 随后注入 ammo=0 (比赛中本会切 SUPPLY) 用以证明主决策确已停止:
+  # SUPPLY 绝不应出现; DEFEND (比赛中已发) 仍在抓取流里.
   local goal_log="$WORK_DIR/_inv6_goal.txt"
-  capture_goal_pose 18 "$goal_log" &
+  capture_goal_pose 22 "$goal_log" &
   local cap_pid=$!
-  sleep 1.5
-  pub_game_status 4
+  sleep 1
   pub_robot_status 300 100
-  sleep 2
-  local act_log="$WORK_DIR/_inv6_act.txt"
-  local apid; apid=$(send_bt_goal_async "$act_log")
-  sleep 6                     # 比赛中: 抓到 DEFEND
+  sleep 3
+  pub_game_status 4
+  sleep 5                     # 比赛中: 抓到 DEFEND
   pub_game_status 5           # 比赛结束 -> 停止主决策
   sleep 3                     # 等 halt 生效
   pub_robot_status 300 0      # 比赛中本会触发 SUPPLY; 已结束应被忽略
   sleep 4                     # 观察窗口: 不应出现新 goal
   wait "$cap_pid" 2>/dev/null || true
-  kill -INT "$apid" 2>/dev/null || true
-  wait "$apid" 2>/dev/null || true
   assert_present_absent_or_diff "6" "$goal_log" "$DEFEND" "$SUPPLY"
 }
 
 run_case_inv7() {
-  echo "=== INV-7: server 重启后仍能执行决策并发守点 ($DEFEND) ==="
+  echo "=== INV-7: 节点重启后仍能执行决策并发守点 ($DEFEND) ==="
   stop_server
-  start_server || { echo "[FAIL] 7 server restart"; FAIL_COUNT=$((FAIL_COUNT+1)); return; }
+  start_server || { echo "[FAIL] 7 node restart"; FAIL_COUNT=$((FAIL_COUNT+1)); return; }
   local goal_log="$WORK_DIR/_inv7_goal.txt"
-  capture_goal_pose 10 "$goal_log" &
+  capture_goal_pose 12 "$goal_log" &
   local cap_pid=$!
-  sleep 1.5
-  pub_game_status 4
+  sleep 1
   pub_robot_status 300 100
-  sleep 2
-  local act_log="$WORK_DIR/_inv7_act.txt"
-  local apid; apid=$(send_bt_goal_async "$act_log")
+  sleep 3
+  pub_game_status 4
+  sleep 4
   wait "$cap_pid" 2>/dev/null || true
-  kill -INT "$apid" 2>/dev/null || true
-  wait "$apid" 2>/dev/null || true
   assert_eq_or_diff "7" "$goal_log" "$DEFEND_RE"
 }
 
 # Main
 echo "Mode: $MODE; Work: $WORK_DIR"
-# 每个用例前 restart server: 重置进程级 PubGoal 去重状态 (g_last_goal_per_topic) 与
-# blackboard, 保证用例之间互不串扰 (否则上一用例 publish 过的坐标会被去重屏蔽).
+# 每个用例前 restart node: 重置 GoalPublisher 去重状态与 RefereeSnapshot, 保证用例之间
+# 互不串扰 (否则上一用例 publish 过的坐标会被去重屏蔽).
 start_server || exit 99
 run_case_inv1
 stop_server; start_server || exit 99
