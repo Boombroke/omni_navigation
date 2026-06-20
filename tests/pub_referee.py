@@ -13,7 +13,7 @@ import time
 import rclpy
 from rclpy.node import Node
 
-from rm_interfaces.msg import GameStatus, RobotStatus
+from rm_interfaces.msg import GameRobotHP, GameStatus, RobotStatus
 
 
 def main():
@@ -32,6 +32,11 @@ def main():
     r.add_argument("--rate-hz", type=float, default=10.0)
     r.add_argument("--count", type=int, default=20)
 
+    h = sub.add_parser("hp")
+    h.add_argument("--outpost", type=int, default=600)
+    h.add_argument("--rate-hz", type=float, default=10.0)
+    h.add_argument("--count", type=int, default=20)
+
     args, _ = parser.parse_known_args()
 
     rclpy.init()
@@ -44,12 +49,16 @@ def main():
         msg.game_progress = args.progress
         msg.stage_remain_time = args.remain
         msg.behavior_state = 0
-    else:
+    elif args.cmd == "robot":
         pub = node.create_publisher(RobotStatus, "/referee/robot_status", 10)
         msg = RobotStatus()
         msg.current_hp = args.hp
         msg.projectile_allowance_17mm = args.ammo
         msg.maximum_hp = 400
+    else:
+        pub = node.create_publisher(GameRobotHP, "/referee/all_robot_hp", 10)
+        msg = GameRobotHP()
+        msg.ally_outpost_hp = args.outpost
 
     # 等 publisher 与已存在的 subscriber 完成 discovery
     deadline = time.time() + 1.5
