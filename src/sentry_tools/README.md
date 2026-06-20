@@ -86,7 +86,7 @@ ros2 launch serial_driver serial_driver.launch.py device_name:=/dev/pts/4
 5. 选中列表项，点击「复制选中」复制到剪贴板
 6. 「清除标记」清空地图标记 + 列表
 
-拾取的坐标可直接填入行为树的目标位置配置。
+拾取的坐标可直接填入状态机策略的目标坐标（`src/sentry_behavior/src/strategies.cpp` 或参数）。
 
 #### 地图编辑
 
@@ -167,7 +167,7 @@ ros2 launch serial_driver serial_driver.launch.py device_name:=/dev/pts/4
 | 导航无路径 | planner_server + obstacle_scan + terrain_map | `fix_nav2_deps.sh` + 启动 launch |
 | 定位漂移 | `odom→chassis` TF + odometry topic | 检查 point_lio 节点 |
 | 裁判系统异常 | 串口设备 + `referee/*` topic | `fix_serial_permission.sh` |
-| 行为树不执行 | sentry_behavior_server + referee topic | `fix_build.sh` |
+| 决策不执行 | sentry_behavior_node + referee topic | `fix_build.sh` |
 | 所有都红 | 全部 | `setup_env.sh`（一键修复按钮）|
 
 ### 标签页 4：串口诊断

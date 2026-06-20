@@ -3,7 +3,7 @@
 ## 第1章: 系统总览
 
 ### 1.1 项目背景与功能描述
-本项目是为 RoboMaster 哨兵机器人量身定制的自主导航系统。哨兵机器人在比赛中承担着全自动防御和进攻的核心任务，要求系统具备极高的定位精度、环境感知能力以及复杂的战术决策逻辑。本系统集成了从底层传感器驱动到高层行为树决策的全栈功能，在真实赛场环境中稳定运行。
+本项目是为 RoboMaster 哨兵机器人量身定制的自主导航系统。哨兵机器人在比赛中承担着全自动防御和进攻的核心任务，要求系统具备极高的定位精度、环境感知能力以及复杂的战术决策逻辑。本系统集成了从底层传感器驱动到高层状态机决策的全栈功能，在真实赛场环境中稳定运行。
 
 系统核心目标：
 - **高精度定位**: 在剧烈运动和碰撞中保持厘米级的定位精度。
@@ -26,7 +26,7 @@
 [先验 PCD 地图] ---------> [Small GICP 重定位]      |       [OmniPidPursuit 控制器]
                            (map → odom 修正)        |              |
                                                     |              v
-[裁判系统 (Referee)] ----> [BehaviorTree.CPP]  <----+      [Velocity Smoother]
+[裁判系统 (Referee)] ----> [sentry_behavior 状态机]  <----+      [Velocity Smoother]
                            (高层战术决策)                           |
                                                                     v
                                                          [Fake Vel Transform]
@@ -44,7 +44,7 @@
 - **中间件**: ROS2 Jazzy Jalisco
 - **定位算法**: Point-LIO (激光惯性紧耦合) + Small GICP (点云配准重定位)
 - **导航框架**: Nav2 (Navigation2) 及其自定义插件
-- **决策系统**: BehaviorTree.CPP 4.x + BehaviorTree.ROS2 0.3.0
+- **决策系统**: 自研分层状态机 (sentry_behavior, 零外部状态机库)
 - **构建系统**: ament_cmake / colcon (Release 模式优化)
 
 ---
@@ -224,10 +224,18 @@ map (全局地图坐标系，由 small_gicp 修正)
 
 ---
 
-## 第5章: 行为树决策系统
+## 第5章: 状态机决策系统
+
+> 本章 5.1 描述**当前实现**(自研分层状态机)。下方 5.2~5.3 的"BehaviorTree 节点 / RMUL / RMUC 多阶段"等小节为早期 BehaviorTree 设计稿,其中视觉 / RFID / BattlefieldInformation 等从未在本仓库实装,现已整体被状态机取代;**权威说明以 [sentry_behavior/README.md](../sentry_behavior/README.md) 为准**。
 
 ### 5.1 框架概述
-系统采用 `BehaviorTree.CPP` 4.x 版本，通过 XML 文件定义复杂的战术逻辑。决策系统通过订阅裁判系统、视觉系统和导航系统的状态，实时切换机器人的行为模式。
+`sentry_behavior` 采用**自研分层状态机(HSM)**,脱离 BehaviorTree 库,零外部状态机依赖。`sentry_behavior_node` 单节点订阅裁判系统话题写入 `RefereeSnapshot`,在 `SingleThreadedExecutor` 上以 `tick_frequency`(默认 20Hz)驱动 2 层状态机,把目标点发布到 `/goal_pose`(Nav2 消费)。
+
+**2 层结构**:
+- **生命周期层(唯一有状态)**:`WAIT_START ↔ IN_MATCH`。reactive 父 guard(`game_progress==4` 且阶段剩余时间 ∈ [0,420]s)每 tick 先判,比赛中条件失效立即转 `WAIT_START` 并复位战术层 + 清目标缓存。
+- **战术层(无状态)**:每个策略 = 一张按优先级排序的 guard 表,首个命中者保持其目标点,末项无条件兜底。guard 是对 `RefereeSnapshot`(progress/hp/ammo/outpost_hp)的纯函数;阈值为节点参数,不重编可调。
+
+**三个策略**:`rmuc_defend`(`hp>=151 && ammo>=1` → 守点 `(3.71,-0.61)`,否则补给 `(-0.27,-3.94)`)、`a`(阈值 `hp>=300`)、`b`(前哨存活则 `hp>=300 && ammo>=1` 巡逻 `(9.17,4.07)` / 补给,前哨倒则点3 `(3.27,-0.90)`)。节点内嵌 TCP NDJSON 状态可视化协议(`viz_port` 默认 1667,供独立 Rust/C 客户端,不阻塞决策 tick)。
 
 ### 5.2 自定义插件详细列表
 

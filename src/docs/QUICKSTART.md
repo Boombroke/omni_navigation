@@ -95,15 +95,15 @@ colcon build --packages-select sentry_behavior --symlink-install --cmake-args -D
 ```bash
 ros2 launch sentry_nav_bringup rm_sentry_launch.py
 ```
-该命令同时启动串口驱动、Livox 驱动、Point-LIO、导航栈，以及（可选）行为树和录包。
+该命令同时启动串口驱动、Livox 驱动、Point-LIO、导航栈，以及（可选）状态机决策和录包。
 
 关键参数：
 ```bash
 # 不启动录包
 ros2 launch sentry_nav_bringup rm_sentry_launch.py enable_recorder:=False
 
-# 启动战术行为树
-ros2 launch sentry_nav_bringup rm_sentry_launch.py enable_behavior:=True target_tree:=a
+# 启动状态机决策
+ros2 launch sentry_nav_bringup rm_sentry_launch.py enable_behavior:=True strategy:=rmuc_defend
 
 # 指定地图/PCD 名称（world 参数对应 map/reality/<world>.yaml 和 pcd/reality/<world>.pcd）
 ros2 launch sentry_nav_bringup rm_sentry_launch.py world:=rmul_2026
@@ -124,7 +124,7 @@ ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py \
 
 > 实车 launch 的 `world` 默认值是 `204`（数字，对应实验室地图命名），需根据实际地图文件名覆盖。
 
-## 5. 行为树决策（独立启动）
+## 5. 状态机决策（独立启动）
 ```bash
 ros2 launch sentry_behavior sentry_behavior_launch.py
 ```

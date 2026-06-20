@@ -10,7 +10,7 @@
 - [1. 运行模式总览](#1-运行模式总览)
 - [2. 实车导航模式](#2-实车导航模式)
 - [3. SLAM 建图模式](#3-slam-建图模式)
-- [4. 行为树决策系统](#4-行为树决策系统)
+- [4. 状态机决策系统](#4-状态机决策系统)
 - [5. 辅助工具](#5-辅助工具)
 - [6. Nav2 导航参数详解](#6-nav2-导航参数详解)
 - [7. 定位模块参数详解](#7-定位模块参数详解)
@@ -28,7 +28,7 @@
 |:---|:---|:---|:---|
 | 实车导航 | `rm_navigation_reality_launch.py` | `slam:=False` | 物理机器人的自主导航 |
 | 实车建图 | `rm_navigation_reality_launch.py` | `slam:=True` | 物理机器人构建地图 |
-| 行为树决策 | `sentry_behavior_launch.py` | `target_tree` | 比赛战术逻辑（独立启动） |
+| 状态机决策 | `sentry_behavior_launch.py` | `strategy` | 比赛战术逻辑（独立启动） |
 | 手柄遥控 | 内嵌于导航 launch | 默认开启 | PS4 手柄控制 |
 
 ### Launch 层级关系
@@ -45,33 +45,29 @@
   ├── joy_teleop_launch.py
   └── rviz_launch.py (可选)
 
-行为树决策 (独立):
+状态机决策 (独立):
   sentry_behavior_launch.py
-  ├── sentry_behavior_server (BT 执行服务)
-  └── sentry_behavior_client (BT 目标选择客户端)
+  └── sentry_behavior_node (自研分层状态机, 发布 /goal_pose)
 ```
 
-### 两层行为树架构
+### 两层决策/导航架构
 
-系统包含两个独立的行为树子系统，协作完成自主决策与导航：
+系统将"决定去哪里"与"决定怎么去"分离：
 
 ```
-sentry_behavior (游戏策略 BT)
-    │  决定 "去哪里"
-    │  ├─ NavigateTo (RMUC.xml / test_navigate.xml)
-    │  │    → 调用 Nav2 navigate_to_pose action，等待真实 SUCCESS/FAILURE
-    │  └─ PubGoal (a.xml / b.xml)
-    │       → 发布目标到 /goal_pose，立即 SUCCESS (fire-and-forget)
+sentry_behavior (自研分层状态机)
+    │  决定 "去哪里"：按 strategy 的 guard 表选目标
+    │  └─ 发布目标到 /goal_pose（去重 + 无订阅重发）
     v
-Nav2 bt_navigator (导航 BT)
+Nav2 bt_navigator (Nav2 导航 BT)
     │  决定 "怎么去"
     │  ComputePathToPose → FollowPath
     v
 omni_pid_pursuit_controller (局部控制)
 ```
 
-- **游戏策略层** (`sentry_behavior/behavior_trees/`): BTCPP_format="4"，根据裁判系统、视觉识别等信息决定巡逻路线和战术切换。
-- **导航执行层** (`sentry_nav_bringup/behavior_trees/`): BTCPP_format="3"，Nav2 标准导航行为树，处理路径规划、跟踪和恢复。
+- **战术决策层** (`sentry_behavior`): 自研分层状态机（无 BehaviorTree），裁判系统驱动，向 `/goal_pose` 发布目标点。
+- **导航执行层** (`sentry_nav_bringup/behavior_trees/`): BTCPP_format="3"，Nav2 `bt_navigator` 标准导航行为树，处理路径规划、跟踪和恢复。
 
 ---
 
@@ -186,19 +182,53 @@ ros2 run nav2_map_server map_saver_cli -f ~/my_map
 
 ---
 
-## 4. 行为树决策系统
+## 4. 状态机决策系统
+
+> **权威与完整说明见 [sentry_behavior/README.md](../../sentry_behavior/README.md)。** 本节为操作摘要。下方 4.x 中"服务端/客户端参数、可用行为树、Groot2、自定义节点、黑板"等小节为 **BehaviorTree 时代历史内容**,已整体被状态机取代(现已无 `sentry_behavior_server/client`、`target_tree`、Groot2、BT 节点/树 XML),仅作历史参考。
 
 ### 概述
 
-行为树决策系统独立于导航栈运行，通过向 `/goal_pose` 话题发布目标点来驱动 Nav2 导航。
+`sentry_behavior_node`(自研分层状态机,脱离 BehaviorTree)订阅裁判系统话题,以 `tick_frequency`(默认 20Hz)在 `SingleThreadedExecutor` 上驱动 2 层状态机(生命周期 `WAIT_START↔IN_MATCH` × 战术 guard 表),向 `/goal_pose` 发布目标点驱动 Nav2。运行时由 `strategy` 参数选策略。
 
 ### 启动命令
 
 ```bash
-# 实车环境
-ros2 launch sentry_behavior sentry_behavior_launch.py \
-  use_sim_time:=False
+# 实车环境(默认 strategy=rmuc_defend)
+ros2 launch sentry_behavior sentry_behavior_launch.py use_sim_time:=False strategy:=rmuc_defend
 ```
+
+### 节点参数(`params/sentry_behavior.yaml`)
+
+| 参数 | 默认 | 说明 |
+|:---|:---|:---|
+| `strategy` | `rmuc_defend` | 策略名(`rmuc_defend` / `a` / `b`) |
+| `tick_frequency` | `20.0` | 状态机主循环频率 (Hz) |
+| `viz_enable` / `viz_port` | `true` / `1667` | 内嵌 TCP NDJSON 状态可视化协议(供独立 Rust/C 客户端) |
+| `rmuc_hp_min`/`attack_hp_min`/`patrol_hp_min`/`ammo_min`/`outpost_hp_min` | `151/300/300/1/1` | 战术阈值 |
+
+### 策略与坐标
+
+- `rmuc_defend`:`hp>=151 && ammo>=1` → 守点 `(3.71,-0.61)`,否则补给 `(-0.27,-3.94)`。
+- `a`:阈值 `hp>=300 && ammo>=1` → 攻击点 `(3.71,-0.61)`,否则补给。
+- `b`:前哨存活 → `hp>=300 && ammo>=1` 巡逻 `(9.17,4.07)` / 补给;前哨倒 → 点3 `(3.27,-0.90)`。
+
+### 切换策略
+
+```bash
+ros2 launch sentry_behavior sentry_behavior_launch.py strategy:=b
+```
+
+### 状态可视化
+
+节点内嵌 TCP NDJSON server(`viz_port`,默认 1667),独立线程非阻塞推送 `graph`/`state`/`transition` 帧,供独立 Rust/C 客户端连接(无 ROS 依赖);`nc 127.0.0.1 1667` 可直接看。
+
+### 回归测试
+
+`tests/inv_smoke.sh` 注入裁判数据驱动 `strategy=rmuc_defend`,从 `/goal_pose` 抓坐标序列验证 INV-1~7(守点/补给坐标与策略同步)。
+
+---
+
+<!-- 以下为 BehaviorTree 时代历史内容,已被状态机取代,仅作参考 -->
 
 ### 服务端参数 (sentry_behavior_server)
 
@@ -621,16 +651,16 @@ ros2 launch location map_visualizer_launch.py
 - 检查 IMU 数据质量，调整 `satu_acc` / `satu_gyro`
 - 增大 `lidar_meas_cov`（降低 LiDAR 测量信任度）
 
-### 场景 5: 行为树不执行 / 无动作
+### 场景 5: 状态机不发目标 / 无动作
 
-- 确认裁判系统话题正在发布数据：`ros2 topic echo /referee/game_status`
-- 检查 `target_tree` 参数是否指向正确的树名
-- 启用 Groot2 调试：连接到 `localhost:1667` 查看节点执行状态
-- 设置 `use_cout_logger: true` 查看终端日志
-- 确认 Nav2 导航栈已正常启动（行为树通过 `/goal_pose` 发布目标）
+- 确认裁判系统话题正在发布数据：`ros2 topic echo /referee/game_status`、`/referee/robot_status`
+- 确认 `game_progress==4`（未开赛时停在 `WAIT_START`，本就不发 `/goal_pose`，符合预期）
+- 检查 `strategy` 参数是否为有效策略名（`rmuc_defend` / `a` / `b`；未知名节点会 FATAL 退出）
+- 连接状态可视化看活动状态：`nc 127.0.0.1 <viz_port>`（默认 1667）
+- 确认 Nav2 导航栈已正常启动（状态机通过 `/goal_pose` 发布目标）
 
 ### 场景 6: 需要切换比赛策略
 
-1. 修改 `sentry_behavior.yaml` 中的 `target_tree` 值
-2. 或在 launch 命令中指定：`ros2 launch sentry_behavior sentry_behavior_launch.py target_tree:=b`
-3. 可选树名（`a` / `b` / `rmuc_2026_sentry` / `test_navigate`）参见[第 4 节 - 可用行为树](#可用行为树)
+1. 修改 `sentry_behavior.yaml` 中的 `strategy` 值
+2. 或在 launch 命令中指定：`ros2 launch sentry_behavior sentry_behavior_launch.py strategy:=b`
+3. 可选策略：`rmuc_defend` / `a` / `b`（参见[第 4 节](#4-状态机决策系统)）

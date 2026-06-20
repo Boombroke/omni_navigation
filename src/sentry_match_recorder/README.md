@@ -63,7 +63,7 @@ IDLE  ──── consec_active >= debounce_count ───► RECORDING
 | 传感器原始 | `/livox/lidar_primary`、`/livox/lidar_secondary`、`/livox/imu_primary`、`/livox/imu_secondary` |
 | 里程计 / 配准点云 | `/odometry`、`/lidar_odometry`、`/cloud_registered`、`/registered_scan` |
 | Nav2 控制链 | `/plan`、`/local_plan`、`/received_global_plan`、`/cmd_vel_nav`、`/cmd_vel_chassis`、`/cmd_vel` |
-| Costmap + 行为树 | `/global_costmap/costmap`、`/global_costmap/costmap_updates`、`/local_costmap/costmap`、`/local_costmap/costmap_updates`、`/behavior_tree_log` |
+| Costmap | `/global_costmap/costmap`、`/global_costmap/costmap_updates`、`/local_costmap/costmap`、`/local_costmap/costmap_updates` |
 | 裁判系统 | `/referee/game_status`、`/referee/robot_status`、`/referee/all_robot_hp`、`/referee/rfidStatus` |
 
 需要新增/裁剪时优先用 `extra_topics` / `exclude_topics` 参数，而非直接修改 `topics.yaml`。
@@ -149,7 +149,7 @@ ros2 run sentry_match_recorder merge_sortie logs/match-bags/sortie_20260521_1430
 
 ## 注意事项
 
-- **磁盘空间**：默认 26 个话题 + 双 Mid360 + LIO IMU，单场 7 分钟约 1~3 GB，比赛日前确认 IPC 剩余空间
+- **磁盘空间**：默认 25 个话题 + 双 Mid360 + LIO IMU，单场 7 分钟约 1~3 GB，比赛日前确认 IPC 剩余空间
 - **不要 SIGKILL**：强杀 `ros2 bag record` 会导致最后一个 mcap 索引损坏；本节点统一走 `SIGINT → SIGTERM` 升级路径
 - **多实例**：若同时跑两个实例，需通过 `record_dir` / `sortie_prefix` 区分输出目录
 

@@ -4,7 +4,7 @@
 
 # Sentry26 — RoboMaster 哨兵机器人 ROS2 自主导航系统
 
-RoboMaster 2026 赛季哨兵机器人 ROS2 自主导航系统。**全向 (Mecanum) 底盘 + 独立云台 + 持续自旋**,基于 ROS2 Jazzy + Nav2 + BehaviorTree.CPP / BehaviorTree.ROS2 + Livox Mid360,纯实车运行。
+RoboMaster 2026 赛季哨兵机器人 ROS2 自主导航系统。**全向 (Mecanum) 底盘 + 独立云台 + 持续自旋**,基于 ROS2 Jazzy + Nav2 + 自研分层状态机决策 + Livox Mid360,纯实车运行。
 
 - **Maintainer**: boombroke <2218681402@qq.com>
 - **基于**: [pb2025_sentry_nav](https://github.com/SMBU-PolarBear-Robotics-Team/pb2025_sentry_nav)(Lihan Chen 等)二次开发并适配 RM2026 赛季
@@ -35,8 +35,8 @@ graph LR
     end
 
     subgraph 决策层
-        REF[裁判系统] --> BT[BehaviorTree.CPP<br/>RMUC.xml 战术树]
-        BT -->|PubGoal /goal_pose| GP
+        REF[裁判系统] --> BT[sentry_behavior<br/>分层状态机]
+        BT -->|/goal_pose| GP
     end
 
     subgraph 执行层
@@ -72,8 +72,8 @@ map → odom → base_footprint → chassis → gimbal_yaw → gimbal_pitch → 
 ## 功能特性
 
 - **全向底盘 + 持续自旋**:四麦轮任意方向平移;底盘可固定 `spin_speed` 持续自旋(默认 3.14 rad/s),云台反向跟随保持指向稳定。
-- **决策层下发目标**:`sentry_behavior` 三棵战术树(`rmuc_defend` / `a` / `b`)用 `PubGoal`(`BT::SyncActionNode`)把 `PoseStamped` 发布到 `/goal_pose`(fire-and-forget,立即 SUCCESS);`NavigateTo`(`BT::RosActionNode<NavigateToPose>`,等真实 SUCCESS/FAILURE/feedback)保留在插件库供需要的树使用(`test_navigate.xml` 演示)。
-- **Reactive 决策树**:`RMUC.xml`(`rmuc_defend`)用 `KeepRunningUntilFailure + ReactiveSequence/ReactiveFallback + WhileDoElse` 实现守点↔补给滞回,裁判状态(弹丸 / 血量)变化时立刻 halt 当前分支并切换。
+- **决策层下发目标**:`sentry_behavior` 自研分层状态机(三个策略 `rmuc_defend` / `a` / `b`,运行时由 `strategy` 参数选择)把 `PoseStamped` 发布到 `/goal_pose`(Nav2 消费);单 publisher 去重 + 无订阅者重发 + 比赛结束复位。
+- **Reactive 决策**:`sentry_behavior_node` 2 层分层状态机(生命周期 `WAIT_START↔IN_MATCH` × 战术 guard 表)每 tick 重判裁判状态(弹丸 / 血量 / 前哨),条件变化立刻切换目标点;比赛结束自动复位等下一场。
 - **高频定位**:Point-LIO 激光惯性紧耦合里程计 + small_gicp 先验地图全局重定位。
 - **地形感知**:基于 intensity 的体素代价层(`IntensityVoxelLayer`)+ `BackUpFreeSpace` 自由空间后退恢复。
 - **工具链**:串口 Mock、地图坐标拾取、串口实时数据可视化、INV-1~7 决策树回归脚本。
@@ -96,19 +96,18 @@ src/
 │   ├── livox_ros_driver2/               #   [第三方] Livox Mid360 ROS2 驱动
 │   └── sentry_nav/                      #   元包(依赖聚合)
 ├── sentry_nav_bringup/                  # Launch / Nav2 参数 / 地图 / PCD / RViz / Nav2 BT XML
-├── sentry_behavior/                     # BehaviorTree 战术决策(RMUC.xml + 动作/条件插件)
+├── sentry_behavior/                     # 自研状态机战术决策(strategies + TCP 可视化协议)
 ├── sentry_match_recorder/               # 比赛期间自动 rosbag 录制(裁判 game_progress 触发)
 ├── sentry_robot_description/            # 机器人 SDF/xmacro 描述
 ├── sentry_tools/                        # 串口 Mock / 地图坐标拾取 / 数据可视化(独立脚本, 非 ROS 包)
 ├── serial/serial_driver/                # rm_serial_driver(v3.0 多包协议)
 ├── rm_interfaces/                       # 自定义消息(裁判系统 / 视觉)
-├── BehaviorTree.ROS2/                   # [第三方] in-tree behaviortree_ros2 + btcpp_ros2_interfaces
 ├── scripts/                             # 环境配置与修复脚本
 └── docs/                                # 项目级文档
-tests/                                   # INV-1~7 决策树回归脚本(注入裁判数据 + 抓 /goal_pose 坐标)
+tests/                                   # INV-1~7 状态机回归脚本(注入裁判数据 + 抓 /goal_pose 坐标)
 ```
 
-> 全量包清单:`find src -name package.xml | xargs grep '<name>'`(当前 21 个 ROS 包)。
+> 全量包清单:`find src -name package.xml | xargs grep '<name>'`(当前 19 个 ROS 包)。
 
 ## 环境要求
 
@@ -134,14 +133,14 @@ source install/setup.bash
 colcon build --packages-select sentry_behavior --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 ```
 
-> **OOM 预防**:`btcpp_ros2_interfaces` / `rm_interfaces` 等 IDL 包 Python binding 内存占用大,全量并行在 16G 内存机器上易 OOM,必要时加 `--parallel-workers 4` 或 `--executor sequential`。若编译报错,`src/scripts/fix_*.sh` 收录了常见修复(nav2 依赖 / libusb / pcl / ROS 环境 / 串口权限)。
+> **OOM 预防**:`rm_interfaces` 等 IDL 包 Python binding 内存占用大,全量并行在 16G 内存机器上易 OOM,必要时加 `--parallel-workers 4` 或 `--executor sequential`。若编译报错,`src/scripts/fix_*.sh` 收录了常见修复(nav2 依赖 / libusb / pcl / ROS 环境 / 串口权限)。
 
 ## 快速开始
 
 ### 实车模式
 
 ```bash
-# 一键(导航 + 串口 + 可选决策树)
+# 一键(导航 + 串口 + 可选状态机决策)
 ros2 launch sentry_nav_bringup rm_sentry_launch.py
 
 # 或分步:建图
@@ -163,13 +162,13 @@ ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py slam:=False world
 | `use_rviz` | 启动 RViz | `True` |
 | `enable_recorder` | 比赛自动录包(实车 launch) | `True` |
 | `enable_behavior` | 启动 sentry_behavior 决策(实车 launch) | `False` |
-| `target_tree` | 决策树名(XML 中的 BehaviorTree ID) | 见 `sentry_behavior` |
+| `strategy` | 状态机策略名(实车 launch) | `rmuc_defend`(可选 `a` / `b`) |
 
 > 完整参数与默认值以各 launch 的 `DeclareLaunchArgument` 为准,详见 [sentry_nav_bringup README](src/sentry_nav_bringup/README.md)。
 
-## 决策树回归测试
+## 决策回归测试
 
-`tests/inv_smoke.sh` 注入裁判数据驱动 `rmuc_defend` 树,从 `/goal_pose` topic 抓 `PubGoal` 坐标序列,验证七条不变量(INV-1~7)(需先 `source install/setup.bash`):
+`tests/inv_smoke.sh` 注入裁判数据驱动 `sentry_behavior_node`(`strategy=rmuc_defend`),从 `/goal_pose` topic 抓坐标序列,验证七条不变量(INV-1~7)(需先 `source install/setup.bash`):
 
 ```bash
 source install/setup.bash
@@ -178,7 +177,7 @@ tests/inv_smoke.sh --baseline tests/baseline   # 录基线(重构前)
 tests/inv_smoke.sh --regress  tests/baseline   # 回归对比(重构后)
 ```
 
-七条不变量:未开赛不发目标 / 守点 (3.71,-0.61) / 弹尽切补给 (-0.27,-3.94) / 守↔补滞回 / 低血回补 / 比赛结束停止主决策 / server 重启后仍发守点。
+七条不变量:未开赛不发目标 / 守点 (3.71,-0.61) / 弹尽切补给 (-0.27,-3.94) / 守↔补切换 / 低血回补 / 比赛结束停止主决策 / 节点重启后仍发守点。
 
 ## 调试工具
 
@@ -199,10 +198,10 @@ python3 src/sentry_tools/serial_visualizer.py
 |------|------|
 | [快速部署指南](src/docs/QUICKSTART.md) | 从零环境搭建与首次运行 |
 | [系统架构详解](src/docs/ARCHITECTURE.md) | 各模块数据流、坐标系、接口设计 |
-| [运行模式说明](src/docs/RUNNING_MODES.md) | 实车建图 / 导航 / 行为树模式 |
+| [运行模式说明](src/docs/RUNNING_MODES.md) | 实车建图 / 导航 / 状态机决策模式 |
 | [参数调优指南](src/docs/TUNING_GUIDE.md) | Point-LIO / Nav2 / OmniPidPursuit 调优 |
 | [远程调试指南](src/docs/REMOTE_DEBUG.md) | Foxglove 远程可视化 |
-| [决策树包说明](src/sentry_behavior/README.md) | RMUC.xml + PubGoal / 条件插件 |
+| [状态机决策包说明](src/sentry_behavior/README.md) | strategies + 状态可视化协议 |
 | [Nav2 启动包说明](src/sentry_nav_bringup/README.md) | launch / nav2_params 结构 |
 
 ## 致谢

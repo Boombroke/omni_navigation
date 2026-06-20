@@ -1,229 +1,164 @@
 # sentry_behavior
 
-哨兵机器人战术决策包。基于 [BehaviorTree.CPP 4.9](https://github.com/BehaviorTree/BehaviorTree.CPP) + [BehaviorTree.ROS2 0.3](https://github.com/BehaviorTree/BehaviorTree.ROS2)（in-tree，不跟随 upstream jazzy）。
+哨兵机器人战术决策包。**自研分层状态机（HSM）**,脱离 BehaviorTree 库,零外部状态机依赖。
 
-`sentry_behavior_server` 继承 `BT::ros2::TreeExecutionServer`，对外暴露一个 `sentry_behavior` action server；`sentry_behavior_client` 启动后发送 `target_tree` 名字（必须匹配 XML 中 `BehaviorTree ID`）即可执行对应战术树。
+`sentry_behavior_node` 单节点订阅裁判系统话题写入快照,以固定频率（`tick_frequency`,默认 20Hz）驱动 2 层状态机,把目标点发布到 `/goal_pose`。节点内嵌一个 TCP NDJSON 状态可视化协议,供独立的 Rust/C 客户端连接刷新。
 
 ## 架构
 
 ```
-裁判系统 (referee/*) ──► sentry_behavior_server
-                              │  订阅后写入全局 blackboard:
-                              │    @referee_gameStatus   (GameStatus)
-                              │    @referee_robotStatus  (RobotStatus)
-                              │    @referee_gameRobotHP  (GameRobotHP)
-                              │
-                              ▼
-                    BehaviorTree.CPP 4.9 主循环 (tick_frequency=20 Hz)
-                              │
-                              ▼
-                    战术树 XML (behavior_trees/*.xml)
-                              │
-                              ▼
-                    PubGoal (SyncActionNode)
-                    /goal_pose topic publish
-                    立刻 SUCCESS (fire-and-forget)
+裁判系统 (referee/*) ──► sentry_behavior_node
+                            │  订阅回调写入 RefereeSnapshot:
+                            │    referee/game_status   (GameStatus)  -> progress / remain
+                            │    referee/robot_status  (RobotStatus) -> hp / ammo
+                            │    referee/all_robot_hp   (GameRobotHP) -> outpost_hp
+                            │
+                            ▼
+                  SingleThreadedExecutor + 20Hz Timer
+                            │
+                            ▼
+                  BehaviorMachine (2 层 HSM)
+                    ├─ 生命周期层: WAIT_START <-> IN_MATCH (reactive 父 guard)
+                    └─ 战术层: 按 strategy 选的 guard 表 (首个命中者胜)
+                            │
+                            ▼
+                  GoalPublisher -> /goal_pose (PoseStamped)
+                  (去重 + 0 订阅重发 + 进入 WAIT_START 复位)
 ```
 
-服务端开 `Groot2Publisher` 在端口 `1667`（`groot2_port` 参数），可用 [Groot2](https://www.behaviortree.dev/groot/) 或 [btviz](https://github.com/Boombroke/btviz) 实时可视化树状态。
+### 2 层分层状态机
 
-## 战术树
+- **生命周期层（唯一真有状态）**:`WAIT_START ↔ IN_MATCH`。每 tick 先判 reactive 父 guard(等价旧树 `ReactiveFallback[Inverter(IsGameStatus), 主决策]`):比赛中 `game_progress` 离开 4 立即转 `WAIT_START`、复位战术层并清 `GoalPublisher` 去重缓存,主决策被抢占。
+- **战术层（无状态）**:每个策略 = 一张按优先级排序的 `guard 表`,逐项求值,首个 `active` 命中者保持其目标;末项为无条件兜底。
 
-`behavior_trees/` 下四棵树，运行时由 `target_tree` 参数（必须匹配 XML 中 `BehaviorTree ID`）选择：
+> 历史 `RMUC.xml` / `b.xml` 中"补满返回守点"的高阈值（400/50、381/50）滞回分支**逻辑上不可达**(进入该分支的前提与其判据矛盾),实际行为是**无状态纯函数**。本实现按真实生效语义用**无状态互补 guard**复刻,丢弃死阈值。
 
-| BehaviorTree ID | 文件 | 用途 | 主要节点 |
-|---|---|---|---|
-| `rmuc_defend` | `RMUC.xml` | RMUC 守家策略：守点 ↔ 补给，含血量/弹量滞回控制 | PubGoal + IsStatusOK |
-| `a` | `a.xml` | 进攻向：ammo≥1 且 hp≥300 → 攻击点，否则补给 | PubGoal + IsStatusOK |
-| `b` | `b.xml` | 防守向：前哨站存活时巡逻/补给，前哨站倒后切点3 | PubGoal + IsStatusOK + IsOutpostStatusOK |
-| `test_navigate` | `test_navigate.xml` | 两点往返冒烟测试（仅 INV 测试脚本使用） | NavigateTo |
+### GoalPublisher 语义
 
-> **默认 target_tree**：launch 默认 `a`；`sentry_behavior.yaml` 中 `sentry_behavior_client` 也默认 `a`。
+单一 `/goal_pose` publisher,构造期一次性创建(消除旧多 publisher 的 DDS 首包丢失):
 
-### PubGoal 与 NavigateTo 的语义差异
+- 去重:与上次"已送达"坐标精确 `(x,y)` 相等则不重发;
+- 即使 0 订阅者也 publish,但**仅当有订阅者时才记为已送达**,否则下个 tick 继续重发(处理本节点早于 Nav2 `bt_navigator` 就绪的启动时序);
+- 进入 `WAIT_START` 时 `reset()` 清缓存,使下一场重回同坐标也能重新发布。
 
-| | PubGoal | NavigateTo |
+## 战术策略
+
+运行时由 `strategy` 参数选择(替代旧 `target_tree`):
+
+| strategy | 用途 | guard 表(优先级序) |
 |---|---|---|
-| 类型 | `BT::SyncActionNode` | `BT::ros2::RosActionNode<NavigateToPose>` |
-| 调用方式 | publish `geometry_msgs/PoseStamped` 到指定 topic | 调用 Nav2 `navigate_to_pose` action |
-| 返回时机 | 立刻 SUCCESS（fire-and-forget） | 等 Nav2 回 SUCCESS / FAILURE / feedback |
-| 适用场景 | 持续驻守（配合 KeepRunningUntilFailure） | 路径必须走完才推进的任务 |
+| `rmuc_defend` | RMUC 守家 | ① 守点 `(3.71,-0.61)`: `robot_valid && hp>=151 && ammo>=1` ② 否则 补给 `(-0.27,-3.94)` |
+| `a` | 进攻向 | ① 攻击 `(3.71,-0.61)`: `hp>=300 && ammo>=1` ② 否则 补给 `(-0.27,-3.94)` |
+| `b` | 防守向(含前哨判断) | 前哨存活(`outpost_hp>=1`): ① 巡逻 `(9.17,4.07)`: `hp>=300 && ammo>=1` ② 否则 补给 `(-0.27,-3.94)`;前哨倒: 点3 `(3.27,-0.90)` |
 
-当前三棵战术树（`rmuc_defend` / `a` / `b`）均用 `PubGoal`；`NavigateTo` 保留在插件库供自定义树使用，`test_navigate.xml` 展示其用法。
-
-### 多场比赛永循环外壳（三棵战术树共用结构）
-
-```
-KeepRunningUntilFailure                   ← 一场赛结束后 reset，等下一场
-└─ Sequence
-   ├─ RetryUntilSuccessful(num_attempts=-1)
-   │  └─ Delay(500ms)                     ← 节流，防 RetryNode spam tick
-   │     └─ IsGameStatus(expected=4)       ← progress != 4 → FAILURE → 重试
-   └─ ReactiveFallback                    ← 比赛中
-      ├─ Inverter(IsGameStatus expected=4) ← progress 翻非 4 → SUCCESS → 一场赛结束
-      └─ KeepRunningUntilFailure           ← 比赛中持续运行主决策
-         └─ <主决策 WhileDoElse / Fallback>
-```
-
-`Delay(500ms)` 包裹 `IsGameStatus` 的目的：若 progress != 4，`RetryUntilSuccessful` 会无延迟反复重 tick，早期版本实测产生 357 MB/min 日志；加 Delay 后降至 2 tick/s。
-
-### RMUC.xml（`rmuc_defend`）守家逻辑
-
-```
-ReactiveSequence
-├─ IsGameStatus(expected=4)               ← 进入比赛中才执行主决策
-└─ KeepRunningUntilFailure
-   └─ WhileDoElse
-      ├─ 条件: HP > 150 且 ammo > 0       → do_A: 驻守防守点 (3.71, -0.61)
-      └─ else: 低血/弹尽时               → WhileDoElse（嵌套）
-         ├─ 条件: HP ≥ 400 且 ammo ≥ 50  → do_A: 返回防守点 (3.71, -0.61)
-         └─ else: 继续补给               → 驻守补给点 (-0.27, -3.94)
-```
-
-一旦 `game_progress` 离开 4，`ReactiveSequence` 根节点的 `IsGameStatus` 立刻返回 FAILURE，停止整块主决策，`ReactiveFallback` 首项（`Inverter(IsGameStatus)`）返回 SUCCESS，触发一场赛结束流程。
-
-## 插件清单
-
-`plugins/` 下编出的 BT 插件 `.so`，运行时由 `BT::SharedLibrary` 动态加载。
-
-### Conditions
-
-| 注册 ID | 源文件 | 行为 |
-|---|---|---|
-| `IsGameStatus` | `plugins/condition/is_game_status.cpp` | 读 `@referee_gameStatus`，校验 `game_progress == expected_game_progress` 且 `stage_remain_time ∈ [min_remain_time, max_remain_time]` |
-| `IsStatusOK` | `plugins/condition/is_status_ok.cpp` | 读 `@referee_robotStatus`，校验 `current_hp >= hp_min` 且 `ammo_min <= projectile_allowance_17mm <= ammo_max` |
-| `IsOutpostStatusOK` | `plugins/condition/is_outpost_status_ok.cpp` | 读 `@referee_gameRobotHP`，校验 `ally_outpost_hp >= outpost_hp_min` |
-
-### Actions
-
-| 注册 ID | 源文件 | 类型 | 行为 |
-|---|---|---|---|
-| `PubGoal` | `plugins/action/pub_goal.cpp` | `BT::SyncActionNode` | publish `PoseStamped` 到指定 topic；进程级共享 publisher 避免 DDS discovery 首包丢失；坐标未变化时去重不重发 |
-| `NavigateTo` | `plugins/action/navigate_to.cpp` | `RosActionNode<NavigateToPose>` | 调用 Nav2 `navigate_to_pose` action，等真实 SUCCESS / FAILURE；`error_code` 输出口透传 `rclcpp_action::ResultCode` |
+阈值是节点参数(`rmuc_hp_min` / `attack_hp_min` / `patrol_hp_min` / `ammo_min` / `outpost_hp_min`),不重编即可调。
 
 ## ROS 接口
 
-### 服务端订阅（写入全局 blackboard）
-
-| 话题 | 消息类型 | blackboard 键 |
-|---|---|---|
-| `referee/game_status` | `rm_interfaces/msg/GameStatus` | `@referee_gameStatus` |
-| `referee/robot_status` | `rm_interfaces/msg/RobotStatus` | `@referee_robotStatus` |
-| `referee/all_robot_hp` | `rm_interfaces/msg/GameRobotHP` | `@referee_gameRobotHP` |
-
-### 发布 / Action
-
 | 接口 | 类型 | 说明 |
 |---|---|---|
-| `/goal_pose` | `geometry_msgs/PoseStamped` | `PubGoal` 发出 |
-| `/behavior_tree_log` | BT.CPP 内部 logger | 节点状态切换日志 |
-| action `/sentry_behavior` | `btcpp_ros2_interfaces/action/ExecuteTree` | server 对外 action（client 发 target_tree 到此） |
-| action `/navigate_to_pose` | `nav2_msgs/action/NavigateToPose` | `NavigateTo` 调用（仅 test_navigate.xml 用） |
+| `referee/game_status` | `rm_interfaces/msg/GameStatus` | 订阅;`game_progress`(4=比赛中,5=结算)、`stage_remain_time` |
+| `referee/robot_status` | `rm_interfaces/msg/RobotStatus` | 订阅;`current_hp`、`projectile_allowance_17mm`(弹量) |
+| `referee/all_robot_hp` | `rm_interfaces/msg/GameRobotHP` | 订阅;`ally_outpost_hp`(前哨血量,b 用) |
+| `/goal_pose` | `geometry_msgs/PoseStamped` | 发布;`frame_id=map`,Nav2 `bt_navigator` 消费 |
 
-## 参数（`params/sentry_behavior.yaml`）
+订阅 QoS:`reliable + volatile, depth 10`。
+
+## 参数(`params/sentry_behavior.yaml`)
 
 ```yaml
-sentry_behavior_server:
+sentry_behavior_node:
   ros__parameters:
-    use_sim_time: true
-    action_name: sentry_behavior        # 对外 action server 名
-    tick_frequency: 20                  # BT 主循环频率, Hz
-    groot2_port: 1667                   # Groot2 / btviz 远程可视化端口
-    ros_plugins_timeout: 5000           # ms; NavigateTo 的 server_timeout + wait_for_server_timeout
-    use_cout_logger: false              # 终端打印节点状态切换 (debug 用)
-    plugins:
-      - sentry_behavior/bt_plugins
-    behavior_trees:
-      - sentry_behavior/behavior_trees
-
-sentry_behavior_client:
-  ros__parameters:
-    use_sim_time: true
-    target_tree: a                      # a / b / rmuc_defend / test_navigate
+    use_sim_time: false
+    strategy: rmuc_defend     # rmuc_defend / a / b
+    tick_frequency: 20.0      # Hz
+    viz_enable: true          # 内嵌 TCP NDJSON 可视化协议
+    viz_port: 1667            # 可视化端口
+    rmuc_hp_min: 151
+    attack_hp_min: 300
+    patrol_hp_min: 300
+    ammo_min: 1
+    outpost_hp_min: 1
 ```
+
+未知 `strategy` 名启动即 `FATAL` 退出(不静默回退)。
 
 ## 启动
 
 ```bash
-# 默认 target_tree=a
+# 默认 strategy=rmuc_defend
 ros2 launch sentry_behavior sentry_behavior_launch.py
 
-# RMUC 守家树
-ros2 launch sentry_behavior sentry_behavior_launch.py target_tree:=rmuc_defend
+# 指定策略
+ros2 launch sentry_behavior sentry_behavior_launch.py strategy:=a
+ros2 launch sentry_behavior sentry_behavior_launch.py strategy:=b
 
-# 防守向（含前哨站检查）
-ros2 launch sentry_behavior sentry_behavior_launch.py target_tree:=b
-
-# 实车配置（use_sim_time=false）
-ros2 launch sentry_behavior sentry_behavior_launch.py use_sim_time:=false target_tree:=a
+# 直接跑节点(无 launch)
+ros2 run sentry_behavior sentry_behavior_node --ros-args -p strategy:=rmuc_defend
 ```
 
-实战中由 `sentry_nav_bringup/launch/rm_sentry_launch.py` 统一拉起（`enable_behavior:=True` 时），不单独跑。
+实战中由 `sentry_nav_bringup/launch/rm_sentry_launch.py` 统一拉起(`enable_behavior:=True` 时),`strategy` 经其透传。
 
-## 可视化（Groot2 替代）
+## 状态可视化协议（TCP NDJSON）
 
-[btviz](https://github.com/Boombroke/btviz) 是仓库作者写的 Tauri 桌面应用，连接 `Groot2Publisher` 实时刷新（无 20 节点限制）：
+节点内嵌一个 TCP server(`viz_port`,默认 1667),发逐行 JSON(NDJSON)。独立线程 + 非阻塞写 + 慢客户端丢帧,**永不阻塞 20Hz 决策 tick**;`MSG_NOSIGNAL` 防客户端断开 `SIGPIPE` 杀进程。客户端连接即收 `graph` 帧(静态拓扑),之后持续收 `state`(活动路径/目标/裁判)+ `transition` 事件。供独立 Rust/C GUI 消费(无需 ROS 依赖)。
+
+```jsonc
+// 连接时一次:静态拓扑
+{"type":"graph","v":1,"strategy":"rmuc_defend","states":[{"id":"WAIT_START","parent":null},{"id":"IN_MATCH","parent":null},{"id":"DEFEND","parent":"IN_MATCH"},{"id":"SUPPLY","parent":"IN_MATCH"}],"transitions":[...]}
+// 每次转移:事件
+{"type":"transition","t":<ms>,"from":"DEFEND","to":"SUPPLY"}
+// 状态变更 + ~10Hz:活动路径 + 目标 + 裁判
+{"type":"state","t":<ms>,"active":["IN_MATCH","SUPPLY"],"goal":{"x":-0.27,"y":-3.94},"referee":{"progress":4,"remain":200,"hp":100,"ammo":100,"outpost_hp":0}}
+```
 
 ```bash
-ros2 launch sentry_behavior sentry_behavior_launch.py target_tree:=a
-# 另开终端或另一台机器:
-btviz   # Connect → tcp://127.0.0.1:1667
+# 调试连法:
+nc 127.0.0.1 1667
 ```
 
 ## 回归测试
 
-`tests/inv_smoke.sh` 启动 `sentry_behavior_server` 并以 `target_tree=rmuc_defend` 执行守家树，注入裁判数据，从 `/goal_pose` topic 抓 `PubGoal` 发出的坐标序列，验证 7 条行为不变量：
+`tests/inv_smoke.sh` 启动 `sentry_behavior_node`(`strategy=rmuc_defend`),注入裁判数据,从 `/goal_pose` topic 抓坐标序列,验证 7 条行为不变量(需先 `source install/setup.bash`):
 
 | INV | 描述 |
 |---|---|
-| INV-1 | `game_progress != 4`（未开赛）→ 等待，不发 `/goal_pose` |
-| INV-2 | `progress=4` + `hp>150` + `ammo>0` → 驻守防守点 `(3.71, -0.61)` |
-| INV-3 | `progress=4` + `ammo=0` → 切到补给点 `(-0.27, -3.94)` |
-| INV-4 | 守点 → 弹尽回补 → 补满恢复返回守点（`(3.71,-0.61)→(-0.27,-3.94)→(3.71,-0.61)` 滞回） |
-| INV-5 | 守点 → `hp≤150` → 回补给 `(-0.27, -3.94)` |
-| INV-6 | 比赛结束（`progress` 4→5）→ 停止主决策（守点已发、补给不再出现） |
-| INV-7 | server 重启后仍能执行决策并发守点 `(3.71, -0.61)` |
+| INV-1 | `game_progress != 4`(未开赛)→ 不发 `/goal_pose` |
+| INV-2 | `progress=4` + `hp>=151` + `ammo>=1` → 守点 `(3.71,-0.61)` |
+| INV-3 | `progress=4` + `ammo=0` → 补给 `(-0.27,-3.94)` |
+| INV-4 | 守 → 弹尽回补 → 恢复返回守(`守→补→守` 流转) |
+| INV-5 | 守 → `hp<=150` → 回补给 |
+| INV-6 | 比赛结束(`progress` 4→5)→ 转 WAIT_START 静默(守点已发、补给不再出现) |
+| INV-7 | 节点重启后仍发守点 |
 
 ```bash
 source install/setup.bash
-
-# 跑全套（exit code = FAIL 数）
-tests/inv_smoke.sh
-
-# 记录基线（重构前）
-tests/inv_smoke.sh --baseline tests/baseline
-
-# 回归对比（重构后）
-tests/inv_smoke.sh --regress tests/baseline
+tests/inv_smoke.sh                          # 跑全部 7 条, exit = FAIL 数
+tests/inv_smoke.sh --baseline tests/baseline   # 录基线
+tests/inv_smoke.sh --regress  tests/baseline   # 回归对比
 ```
 
-> **注意**：`rmuc_defend` 用 `PubGoal` 发布到 `/goal_pose`（非 NavigateToPose action），脚本据此从 `/goal_pose` topic 抓坐标。断言坐标取自 `RMUC.xml`（守点 `(3.71, -0.61)`、补给 `(-0.27, -3.94)`）——改动树坐标或树名需同步更新本脚本断言。
+> **注意（强制同步）**:`inv_smoke.sh` 必须与策略实现同步三处:策略名(`strategy:=rmuc_defend`)、机制(发 `/goal_pose`)、坐标(守 `(3.71,-0.61)` / 补 `(-0.27,-3.94)`)。改 `strategies.cpp` 的坐标/策略名/启动机制必须同步改本脚本断言。
 
 ## 目录结构
 
 ```
 sentry_behavior/
-├── behavior_trees/     战术树 XML (RMUC.xml / a.xml / b.xml / test_navigate.xml)
-├── include/            头文件
-├── launch/             sentry_behavior_launch.py
-├── params/             sentry_behavior.yaml
-├── plugins/            BT 插件 C++ 源
-│   ├── action/         pub_goal.cpp / navigate_to.cpp
-│   └── condition/      is_game_status.cpp / is_status_ok.cpp / is_outpost_status_ok.cpp
-├── src/                sentry_behavior_server.cpp / sentry_behavior_client.cpp
+├── include/sentry_behavior/
+│   ├── referee_snapshot.hpp     裁判数据快照
+│   ├── goal_publisher.hpp       /goal_pose 发布(去重/重发/复位)
+│   ├── behavior_machine.hpp     2 层 HSM (Ctx/TacticalState/Strategy/Phase/BehaviorMachine)
+│   ├── strategies.hpp           策略注册表
+│   └── viz/state_viz_server.hpp TCP NDJSON 可视化协议
+├── src/                         对应实现 + sentry_behavior_node.cpp(main)
+├── launch/                      sentry_behavior_launch.py
+├── params/                      sentry_behavior.yaml
 └── CMakeLists.txt
 ```
 
-## 添加新节点
+## 添加新策略
 
-1. 在 `plugins/<kind>/` 下写 `.cpp`，继承 `BT::SimpleConditionNode` / `BT::ros2::RosActionNode<T>` / `BT::SyncActionNode` 等
-2. 文件末尾用 `CreateRosNodePlugin(NS::ClassName, "RegisteredID");` 或 `BT_REGISTER_NODES(factory)` 导出
-3. `CMakeLists.txt` 加：
-
-   ```cmake
-   ament_auto_add_library(my_node SHARED plugins/<kind>/my_node.cpp)
-   list(APPEND plugin_libs my_node)
-   ```
-
-4. `target_compile_definitions(... PRIVATE BT_PLUGIN_EXPORT)` 已在 foreach 里统一加
-5. 在战术树 XML 里直接 `<MyNode .../>` 引用
+1. 在 `src/strategies.cpp` 加一个 `make_<name>(const StrategyParams &)`,用 `TacticalState{id, guard, GoalCmd}` 按优先级填 `Strategy::states`(末项无条件兜底)。
+2. 在 `make_strategy()` 注册表加 `if (name == "<name>") return make_<name>(p);`。
+3. (可选)需要的阈值加进 `StrategyParams` + 节点参数声明。
+4. `strategy:=<name>` 运行。需要历史/记忆的复杂决策可让某个状态内部再挂一个子状态机(框架支持嵌套)。

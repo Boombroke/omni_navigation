@@ -11,7 +11,7 @@
 - 提供实车 **launch 入口**
 - 存放 `config/reality/` **Nav2 参数**
 - 存放地图（`map/`）、先验点云（`pcd/`）、RViz 布局（`rviz/`）
-- 存放 `bt_navigator` 使用的 **Nav2 内置 BT XML**（与 `sentry_behavior` 战术树不同）
+- 存放 `bt_navigator` 使用的 **Nav2 内置 BT XML**（与 `sentry_behavior` 状态机决策不同）
 
 ---
 
@@ -57,7 +57,7 @@ fake_vel_transform    订阅 cmd_vel_nav2_result (input_cmd_vel_topic)
 | 脚本 | 用途 | 关键参数与默认值 |
 |---|---|---|
 | `rm_navigation_reality_launch.py` | **实车主入口**（不含串口驱动） | 见下表 |
-| `rm_sentry_launch.py` | **实车一键**（导航 + 串口 + 录包 + 可选行为树） | 见下表 |
+| `rm_sentry_launch.py` | **实车一键**（导航 + 串口 + 录包 + 可选状态机决策） | 见下表 |
 | `bringup_launch.py` | 内部聚合，被以上入口 include | `slam`, `map`, `prior_pcd_file`, `scan_context_db_file`, `use_composition`(`True`), `log_level`(`info`) |
 | `slam_launch.py` | SLAM 模式（point_lio + slam_toolbox + pointcloud_to_laserscan） | `namespace`, `params_file`, `use_sim_time`, `autostart`, `use_respawn`, `log_level` |
 | `localization_launch.py` | 定位模式（point_lio + map_server + small_gicp_relocalization） | `namespace`, `map`, `prior_pcd_file`, `scan_context_db_file`, `use_composition`(`False`), `container_name`(`nav2_container`) |
@@ -95,7 +95,7 @@ fake_vel_transform    订阅 cmd_vel_nav2_result (input_cmd_vel_topic)
 | `use_foxglove` | `False` | 启动 foxglove_bridge |
 | `enable_recorder` | `True` | 启动 sentry_match_recorder（延迟 5s，game_progress=4 时自动录包） |
 | `enable_behavior` | `False` | 启动 sentry_behavior 战术决策（延迟 8s） |
-| `target_tree` | `1` | 传给 sentry_behavior_client 的行为树 ID |
+| `strategy` | `rmuc_defend` | 传给 sentry_behavior_node 的状态机策略名（rmuc_defend / a / b） |
 
 ---
 
@@ -120,9 +120,9 @@ ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py \
 ```bash
 ros2 launch sentry_nav_bringup rm_sentry_launch.py
 
-# 指定场地 + 开启行为树：
+# 指定场地 + 开启状态机决策：
 ros2 launch sentry_nav_bringup rm_sentry_launch.py \
-  world:=rmul_2026 enable_behavior:=True target_tree:=1
+  world:=rmul_2026 enable_behavior:=True strategy:=rmuc_defend
 ```
 
 ---
