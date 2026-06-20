@@ -35,6 +35,15 @@ rclcpp_components_register_node(action_client
 )
 ament_target_dependencies(action_client rm_interfaces)
 
+# 自研状态机决策节点 (替代 BT server/client; 过渡期与旧 target 并存)
+ament_auto_add_executable(sentry_behavior_node
+  src/sentry_behavior_node.cpp
+  src/goal_publisher.cpp
+  src/behavior_machine.cpp
+  src/strategies.cpp
+)
+ament_target_dependencies(sentry_behavior_node rm_interfaces)
+
 ####### Conditions #######
 ament_auto_add_library(is_game_status SHARED plugins/condition/is_game_status.cpp)
 list(APPEND plugin_libs is_game_status)
