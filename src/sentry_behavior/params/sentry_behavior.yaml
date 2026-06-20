@@ -1,25 +1,13 @@
-sentry_behavior_server:
+sentry_behavior_node:
   ros__parameters:
-    use_sim_time: true
-    action_name: sentry_behavior         # Optional
-    # 50ms/tick. 历史 2Hz / 1Hz 是 RMUC.xml 用 NavigateTo (action 单次触发) 时代默认; a.xml/b.xml
-    # 用 PubGoal 后, 多层 Sequence/ReactiveSequence 串下来 PubGoal 本体最坏 1+s 才 tick 一次, 看
-    # 起来像 nav2 规划慢. 20Hz 远低于上游默认 100Hz, CPU 负担可忽略.
-    tick_frequency: 20
-    groot2_port: 1667                    # Optional (defaults to 1667)
-    # ros_plugins_timeout 同时作 RosActionNode 的 server_timeout +
-    # wait_for_server_timeout. 仿真 nav2 lifecycle 启动较慢, 调大避免
-    # NavigateTo 报 SEND_GOAL_TIMEOUT.
-    ros_plugins_timeout: 5000            # ms
-    use_cout_logger: false               # Optional (defaults to false)
-
-    plugins:
-      - sentry_behavior/bt_plugins
-
-    behavior_trees:
-      - sentry_behavior/behavior_trees
-
-sentry_behavior_client:
-  ros__parameters:
-    use_sim_time: true
-    target_tree: a
+    use_sim_time: false
+    strategy: rmuc_defend          # rmuc_defend / a / b
+    tick_frequency: 20.0           # Hz, 状态机主循环
+    viz_enable: true               # 内嵌 TCP NDJSON 状态可视化协议
+    viz_port: 1667                 # 可视化端口 (供独立 Rust/C 客户端连接)
+    # 战术阈值 (默认 = 各策略原生效语义); 不重编即可调
+    rmuc_hp_min: 151
+    attack_hp_min: 300
+    patrol_hp_min: 300
+    ammo_min: 1
+    outpost_hp_min: 1

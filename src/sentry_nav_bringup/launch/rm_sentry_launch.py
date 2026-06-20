@@ -36,7 +36,7 @@ def generate_launch_description():
     use_foxglove = LaunchConfiguration("use_foxglove")
     enable_recorder = LaunchConfiguration("enable_recorder")
     enable_behavior = LaunchConfiguration("enable_behavior")
-    target_tree = LaunchConfiguration("target_tree")
+    strategy = LaunchConfiguration("strategy")
 
     declare_namespace_cmd = DeclareLaunchArgument(
         "namespace",
@@ -77,13 +77,13 @@ def generate_launch_description():
     declare_enable_behavior_cmd = DeclareLaunchArgument(
         "enable_behavior",
         default_value="False",
-        description="Whether to start sentry_behavior (tactical BT server + client)",
+        description="Whether to start sentry_behavior (state machine decision node)",
     )
 
-    declare_target_tree_cmd = DeclareLaunchArgument(
-        "target_tree",
-        default_value="1",
-        description="Tactical behavior tree ID for sentry_behavior_client to execute",
+    declare_strategy_cmd = DeclareLaunchArgument(
+        "strategy",
+        default_value="rmuc_defend",
+        description="State-machine strategy for sentry_behavior_node (rmuc_defend / a / b)",
     )
 
     navigation_cmd = IncludeLaunchDescription(
@@ -136,7 +136,7 @@ def generate_launch_description():
                 launch_arguments={
                     "namespace": namespace,
                     "use_sim_time": "False",
-                    "target_tree": target_tree,
+                    "strategy": strategy,
                 }.items(),
             )
         ],
@@ -152,7 +152,7 @@ def generate_launch_description():
     ld.add_action(declare_use_foxglove_cmd)
     ld.add_action(declare_enable_recorder_cmd)
     ld.add_action(declare_enable_behavior_cmd)
-    ld.add_action(declare_target_tree_cmd)
+    ld.add_action(declare_strategy_cmd)
 
     ld.add_action(navigation_cmd)
     ld.add_action(serial_driver_node)

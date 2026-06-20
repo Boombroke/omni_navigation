@@ -23,19 +23,6 @@ find_package(rm_interfaces REQUIRED)
 ## Build ##
 ###########
 
-ament_auto_add_executable(sentry_behavior_server src/sentry_behavior_server.cpp)
-
-ament_auto_add_library(action_client SHARED
-  src/sentry_behavior_client.cpp
-)
-
-rclcpp_components_register_node(action_client
-  PLUGIN sentry_behavior::SentryBehaviorClient
-  EXECUTABLE sentry_behavior_client
-)
-ament_target_dependencies(action_client rm_interfaces)
-
-# 自研状态机决策节点 (替代 BT server/client; 过渡期与旧 target 并存)
 ament_auto_add_executable(sentry_behavior_node
   src/sentry_behavior_node.cpp
   src/goal_publisher.cpp
@@ -44,31 +31,6 @@ ament_auto_add_executable(sentry_behavior_node
   src/state_viz_server.cpp
 )
 ament_target_dependencies(sentry_behavior_node rm_interfaces)
-
-####### Conditions #######
-ament_auto_add_library(is_game_status SHARED plugins/condition/is_game_status.cpp)
-list(APPEND plugin_libs is_game_status)
-
-ament_auto_add_library(is_status_ok SHARED plugins/condition/is_status_ok.cpp)
-list(APPEND plugin_libs is_status_ok)
-
-ament_auto_add_library(is_outpost_status_ok SHARED plugins/condition/is_outpost_status_ok.cpp)
-list(APPEND plugin_libs is_outpost_status_ok)
-
-####### Actions #######
-
-ament_auto_add_library(navigate_to SHARED plugins/action/navigate_to.cpp)
-list(APPEND plugin_libs navigate_to)
-
-ament_auto_add_library(pub_goal SHARED plugins/action/pub_goal.cpp)
-list(APPEND plugin_libs pub_goal)
-
-foreach(bt_plugin ${plugin_libs})
-  target_compile_definitions(${bt_plugin} PRIVATE BT_PLUGIN_EXPORT)
-  ament_target_dependencies(${bt_plugin} rm_interfaces)
-endforeach()
-
-ament_target_dependencies(sentry_behavior_server rm_interfaces)
 
 #############
 ## Testing ##
@@ -88,16 +50,8 @@ endif()
 ## Install ##
 #############
 
-install(
-  TARGETS ${plugin_libs}
-  LIBRARY DESTINATION share/${PROJECT_NAME}/bt_plugins
-  ARCHIVE DESTINATION share/${PROJECT_NAME}/bt_plugins
-  RUNTIME DESTINATION share/${PROJECT_NAME}/bt_plugins
-)
-
 ament_auto_package(
   INSTALL_TO_SHARE
-  behavior_trees
   params
   launch
 )

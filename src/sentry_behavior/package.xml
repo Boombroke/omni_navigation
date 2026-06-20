@@ -4,7 +4,7 @@
   <name>sentry_behavior</name>
   <version>0.0.0</version>
   <description>
-    Tactical decision package for RoboMaster sentry robot. BehaviorTree.CPP 4.9 + BehaviorTree.ROS2 0.3 based reactive battle trees with referee-system-driven state switching.
+    Tactical decision package for RoboMaster sentry robot. Hand-rolled hierarchical state machine (lifecycle x tactical guard-table) driven by referee-system state; publishes goals to /goal_pose. Includes an embedded TCP NDJSON state-visualization protocol.
   </description>
 
   <maintainer email="2218681402@qq.com">boombroke</maintainer>
@@ -14,11 +14,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
-  <depend>rclcpp_action</depend>
-  <depend>rclcpp_components</depend>
   <depend>geometry_msgs</depend>
-  <depend>behaviortree_ros2</depend>
-  <depend>nav2_msgs</depend>
   <depend>rm_interfaces</depend>
 
   <test_depend>ament_lint_auto</test_depend>

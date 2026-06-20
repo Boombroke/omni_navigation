@@ -19,23 +19,21 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node, PushRosNamespace, SetRemap
+from launch_ros.actions import Node, PushRosNamespace
 from launch_ros.descriptions import ParameterFile
 from nav2_common.launch import RewrittenYaml
 
 
 def generate_launch_description():
-    # Get the package directory
     bringup_dir = get_package_share_directory("sentry_behavior")
 
-    # Create the launch configuration variables
     namespace = LaunchConfiguration("namespace")
     use_sim_time = LaunchConfiguration("use_sim_time")
-    target_tree = LaunchConfiguration("target_tree")
+    strategy = LaunchConfiguration("strategy")
     params_file = LaunchConfiguration("params_file")
     log_level = LaunchConfiguration("log_level")
 
-    param_substitutions = {"use_sim_time": use_sim_time, "target_tree": target_tree}
+    param_substitutions = {"use_sim_time": use_sim_time, "strategy": strategy}
 
     configured_params = ParameterFile(
         RewrittenYaml(
@@ -53,7 +51,6 @@ def generate_launch_description():
 
     colorized_output_envvar = SetEnvironmentVariable("RCUTILS_COLORIZED_OUTPUT", "1")
 
-    # Declare the launch arguments
     declare_namespace_cmd = DeclareLaunchArgument(
         "namespace",
         default_value="",
@@ -66,10 +63,10 @@ def generate_launch_description():
         description="Use simulation (Gazebo) clock if true",
     )
 
-    declare_target_tree_cmd = DeclareLaunchArgument(
-        "target_tree",
-        default_value="a",
-        description="Behavior tree name to execute (must match a BehaviorTree ID in XML)",
+    declare_strategy_cmd = DeclareLaunchArgument(
+        "strategy",
+        default_value="rmuc_defend",
+        description="State-machine strategy to run (rmuc_defend / a / b)",
     )
 
     declare_params_file_cmd = DeclareLaunchArgument(
@@ -85,20 +82,10 @@ def generate_launch_description():
     bringup_cmd_group = GroupAction(
         [
             PushRosNamespace(namespace=namespace),
-            SetRemap("/tf", "tf"),
-            SetRemap("/tf_static", "tf_static"),
             Node(
                 package="sentry_behavior",
-                executable="sentry_behavior_server",
-                name="sentry_behavior_server",
-                output="screen",
-                parameters=[configured_params],
-                arguments=["--ros-args", "--log-level", log_level],
-            ),
-            Node(
-                package="sentry_behavior",
-                executable="sentry_behavior_client",
-                name="sentry_behavior_client",
+                executable="sentry_behavior_node",
+                name="sentry_behavior_node",
                 output="screen",
                 parameters=[configured_params],
                 arguments=["--ros-args", "--log-level", log_level],
@@ -106,21 +93,17 @@ def generate_launch_description():
         ]
     )
 
-    # Create the launch description and populate
     ld = LaunchDescription()
 
-    # Set environment variables
     ld.add_action(stdout_linebuf_envvar)
     ld.add_action(colorized_output_envvar)
 
-    # Declare the launch options
     ld.add_action(declare_namespace_cmd)
     ld.add_action(declare_use_sim_time_cmd)
-    ld.add_action(declare_target_tree_cmd)
+    ld.add_action(declare_strategy_cmd)
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_log_level_cmd)
 
-    # Add the actions to launch the nodes
     ld.add_action(bringup_cmd_group)
 
     return ld
