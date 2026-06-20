@@ -46,7 +46,7 @@ EXPECTED_NODES = [
     ('controller_server', 'Nav2 控制器'),
     ('planner_server', 'Nav2 规划器'),
     ('bt_navigator', 'Nav2 导航'),
-    ('sentry_behavior_server', '决策行为树'),
+    ('sentry_behavior_node', '状态机决策'),
     ('odom_bridge', '里程计桥接'),
     ('velocity_smoother', '速度平滑'),
 ]

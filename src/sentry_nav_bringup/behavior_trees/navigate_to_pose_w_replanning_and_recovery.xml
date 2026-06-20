@@ -4,7 +4,7 @@
 
   与上游模板差别:
     - <RecoveryActions> 删掉 1.5m BackUp + 长 BackUpThenClear: 实测 backup 一旦
-      下发到 behavior_server 必须等 ~10s timeout 才能 cancel, 期间新发的 PubGoal
+      下发到 behavior_server 必须等 ~10s timeout 才能 cancel, 期间状态机新发的目标点
       虽然立即 preempt navigate_to_pose action, 但 RecoveryFallback 已经
       转 RUNNING 给 behavior_server, GoalUpdated 重判后 BT 端 halt 但 server 端
       DriveOnHeading 不会立即停, 表现为"目标点切了但机器人还在 backup".
