@@ -2,11 +2,6 @@
 # Use this for repositories that cannot be installed via rosdep.
 
 repositories:
-  BehaviorTree.ROS2:
-    type: git
-    url: https://github.com/SMBU-PolarBear-Robotics-Team/BehaviorTree.ROS2.git
-    version: main
-
   rm_interfaces:
     type: git
     url: https://github.com/SMBU-PolarBear-Robotics-Team/rm_interfaces.git
