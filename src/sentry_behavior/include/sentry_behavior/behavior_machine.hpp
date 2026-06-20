@@ -60,6 +60,8 @@ public:
   void tick(const Ctx & c);
 
   std::vector<std::string> active_path() const;
+  std::vector<std::string> tactical_state_ids() const;
+  const std::optional<GoalCmd> & current_goal() const {return current_goal_;}
   std::string tactical_leaf() const {return tactical_leaf_;}
   Phase phase() const {return phase_;}
 
@@ -71,6 +73,7 @@ private:
   GoalPublisher * goal_;
   Phase phase_ = Phase::WAIT_START;
   std::string tactical_leaf_;
+  std::optional<GoalCmd> current_goal_;
 };
 
 }  // namespace sentry_behavior

@@ -88,7 +88,7 @@ start_server() {
     sleep 2
     RCUTILS_LOGGING_BUFFERED_STREAM=0 \
       ros2 run sentry_behavior sentry_behavior_node \
-      --ros-args -p strategy:=rmuc_defend -p tick_frequency:=10.0 -p use_sim_time:=false \
+      --ros-args -p strategy:=rmuc_defend -p tick_frequency:=10.0 -p use_sim_time:=false -p viz_enable:=false \
       > "$SERVER_LOG" 2>&1 &
     SERVER_PID=$!
     local waited

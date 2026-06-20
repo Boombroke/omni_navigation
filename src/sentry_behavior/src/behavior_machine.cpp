@@ -42,6 +42,7 @@ void BehaviorMachine::enter_wait_start()
 {
   phase_ = Phase::WAIT_START;
   tactical_leaf_.clear();
+  current_goal_.reset();
   goal_->reset();
 }
 
@@ -56,14 +57,27 @@ void BehaviorMachine::tick(const Ctx & c)
   }
 
   if (phase_ == Phase::WAIT_START) {
+    tactical_leaf_.clear();
+    current_goal_.reset();
     return;
   }
 
   const TacticalState & s = strategy_.evaluate(c);
   tactical_leaf_ = s.id;
+  current_goal_ = s.goal;
   if (s.goal) {
     goal_->request(*s.goal);
   }
+}
+
+std::vector<std::string> BehaviorMachine::tactical_state_ids() const
+{
+  std::vector<std::string> ids;
+  ids.reserve(strategy_.states.size());
+  for (const auto & s : strategy_.states) {
+    ids.push_back(s.id);
+  }
+  return ids;
 }
 
 std::vector<std::string> BehaviorMachine::active_path() const

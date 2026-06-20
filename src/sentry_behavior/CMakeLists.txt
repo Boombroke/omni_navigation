@@ -41,6 +41,7 @@ ament_auto_add_executable(sentry_behavior_node
   src/goal_publisher.cpp
   src/behavior_machine.cpp
   src/strategies.cpp
+  src/state_viz_server.cpp
 )
 ament_target_dependencies(sentry_behavior_node rm_interfaces)
 

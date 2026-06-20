@@ -11,9 +11,13 @@
 // limitations under the License.
 
 #include <chrono>
+#include <cstdint>
+#include <cstdio>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rm_interfaces/msg/game_robot_hp.hpp"
@@ -23,9 +27,57 @@
 #include "sentry_behavior/goal_publisher.hpp"
 #include "sentry_behavior/referee_snapshot.hpp"
 #include "sentry_behavior/strategies.hpp"
+#include "sentry_behavior/viz/state_viz_server.hpp"
 
 namespace sentry_behavior
 {
+namespace
+{
+
+std::string build_graph_json(const std::string & strat, const std::vector<std::string> & tac_ids)
+{
+  std::string s = "{\"type\":\"graph\",\"v\":1,\"strategy\":\"" + strat +
+    "\",\"states\":[{\"id\":\"WAIT_START\",\"parent\":null},{\"id\":\"IN_MATCH\",\"parent\":null}";
+  for (const auto & id : tac_ids) {
+    s += ",{\"id\":\"" + id + "\",\"parent\":\"IN_MATCH\"}";
+  }
+  s += "],\"transitions\":[{\"from\":\"WAIT_START\",\"to\":\"IN_MATCH\",\"label\":\"progress==4\"},"
+    "{\"from\":\"IN_MATCH\",\"to\":\"WAIT_START\",\"label\":\"progress!=4\"}]}";
+  return s;
+}
+
+std::string build_state_json(
+  int64_t t_ms, const std::vector<std::string> & path,
+  const std::optional<GoalCmd> & goal, const RefereeSnapshot & r)
+{
+  std::string s = "{\"type\":\"state\",\"t\":" + std::to_string(t_ms) + ",\"active\":[";
+  for (size_t i = 0; i < path.size(); ++i) {
+    if (i) {s += ",";}
+    s += "\"" + path[i] + "\"";
+  }
+  s += "],\"goal\":";
+  if (goal) {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "{\"x\":%.2f,\"y\":%.2f}", goal->x, goal->y);
+    s += buf;
+  } else {
+    s += "null";
+  }
+  s += ",\"referee\":{\"progress\":" + std::to_string(static_cast<int>(r.progress)) +
+    ",\"remain\":" + std::to_string(r.remain) +
+    ",\"hp\":" + std::to_string(r.hp) +
+    ",\"ammo\":" + std::to_string(r.ammo) +
+    ",\"outpost_hp\":" + std::to_string(r.outpost_hp) + "}}";
+  return s;
+}
+
+std::string build_transition_json(int64_t t_ms, const std::string & from, const std::string & to)
+{
+  return "{\"type\":\"transition\",\"t\":" + std::to_string(t_ms) +
+         ",\"from\":\"" + from + "\",\"to\":\"" + to + "\"}";
+}
+
+}  // namespace
 
 class SentryBehaviorNode : public rclcpp::Node
 {
@@ -35,6 +87,8 @@ public:
   {
     const std::string strategy_name = declare_parameter<std::string>("strategy", "rmuc_defend");
     const double tick_frequency = declare_parameter<double>("tick_frequency", 20.0);
+    const bool viz_enable = declare_parameter<bool>("viz_enable", true);
+    const int viz_port = declare_parameter<int>("viz_port", 1667);
 
     StrategyParams params;
     params.rmuc_hp_min = declare_parameter<int>("rmuc_hp_min", params.rmuc_hp_min);
@@ -51,6 +105,12 @@ public:
 
     goal_pub_ = std::make_unique<GoalPublisher>(this, "/goal_pose");
     machine_ = std::make_unique<BehaviorMachine>(std::move(strategy), goal_pub_.get());
+
+    if (viz_enable) {
+      viz_server_ = std::make_unique<StateVizServer>(
+        static_cast<uint16_t>(viz_port),
+        build_graph_json(strategy_name, machine_->tactical_state_ids()));
+    }
 
     const auto qos = rclcpp::QoS(10);
     game_sub_ = create_subscription<rm_interfaces::msg::GameStatus>(
@@ -80,6 +140,17 @@ public:
       [this]() {
         Ctx ctx{snapshot_, now()};
         machine_->tick(ctx);
+        if (viz_server_) {
+          const int64_t t_ms = now().nanoseconds() / 1000000;
+          auto path = machine_->active_path();
+          const std::string leaf = path.empty() ? std::string("ROOT") : path.back();
+          if (leaf != prev_leaf_) {
+            viz_server_->push_transition(build_transition_json(t_ms, prev_leaf_, leaf));
+            prev_leaf_ = leaf;
+          }
+          viz_server_->update_state(
+            build_state_json(t_ms, path, machine_->current_goal(), snapshot_));
+        }
       });
 
     RCLCPP_INFO(
@@ -90,6 +161,8 @@ private:
   RefereeSnapshot snapshot_;
   std::unique_ptr<GoalPublisher> goal_pub_;
   std::unique_ptr<BehaviorMachine> machine_;
+  std::unique_ptr<StateVizServer> viz_server_;
+  std::string prev_leaf_{"ROOT"};
   rclcpp::Subscription<rm_interfaces::msg::GameStatus>::SharedPtr game_sub_;
   rclcpp::Subscription<rm_interfaces::msg::RobotStatus>::SharedPtr robot_sub_;
   rclcpp::Subscription<rm_interfaces::msg::GameRobotHP>::SharedPtr hp_sub_;
