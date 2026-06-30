@@ -20,6 +20,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/vision/Armor.msg"
   "msg/vision/Armors.msg"
   "msg/vision/Target.msg"
+  "msg/vision/TrackGoal.msg"
 
   DEPENDENCIES
     geometry_msgs
