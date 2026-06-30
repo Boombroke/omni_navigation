@@ -167,8 +167,6 @@ fake_vel_transform:
     input_cmd_vel_topic: "cmd_vel_nav2_result"
     # Twist-only final chassis command; keep /cmd_vel free for teleop TwistStamped if needed.
     output_cmd_vel_topic: "cmd_vel_chassis"
-    cmd_spin_topic: "cmd_spin"
-    init_spin_speed: 0.0
 
 small_gicp_relocalization:
   ros__parameters:

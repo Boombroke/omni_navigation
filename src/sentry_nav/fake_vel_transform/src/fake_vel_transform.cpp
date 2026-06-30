@@ -28,26 +28,20 @@ FakeVelTransform::FakeVelTransform(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("robot_base_frame", "gimbal_yaw");
   this->declare_parameter<std::string>("fake_robot_base_frame", "gimbal_yaw_fake");
   this->declare_parameter<std::string>("odom_topic", "odom");
-  this->declare_parameter<std::string>("cmd_spin_topic", "cmd_spin");
   this->declare_parameter<std::string>("input_cmd_vel_topic", "");
   this->declare_parameter<std::string>("output_cmd_vel_topic", "");
-  this->declare_parameter<float>("init_spin_speed", 0.0);
 
   this->get_parameter("robot_base_frame", robot_base_frame_);
   this->get_parameter("fake_robot_base_frame", fake_robot_base_frame_);
   this->get_parameter("odom_topic", odom_topic_);
-  this->get_parameter("cmd_spin_topic", cmd_spin_topic_);
   this->get_parameter("input_cmd_vel_topic", input_cmd_vel_topic_);
   this->get_parameter("output_cmd_vel_topic", output_cmd_vel_topic_);
-  this->get_parameter("init_spin_speed", spin_speed_);
 
   tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
   cmd_vel_chassis_pub_ =
     this->create_publisher<geometry_msgs::msg::Twist>(output_cmd_vel_topic_, 1);
 
-  cmd_spin_sub_ = this->create_subscription<example_interfaces::msg::Float32>(
-    cmd_spin_topic_, 1, std::bind(&FakeVelTransform::cmdSpinCallback, this, std::placeholders::_1));
   cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::TwistStamped>(
     input_cmd_vel_topic_, 10,
     std::bind(&FakeVelTransform::cmdVelCallback, this, std::placeholders::_1));
@@ -58,11 +52,6 @@ FakeVelTransform::FakeVelTransform(const rclcpp::NodeOptions & options)
 
   timer_ = this->create_wall_timer(
     std::chrono::milliseconds(20), std::bind(&FakeVelTransform::publishTransform, this));
-}
-
-void FakeVelTransform::cmdSpinCallback(const example_interfaces::msg::Float32::SharedPtr msg)
-{
-  spin_speed_ = msg->data;
 }
 
 void FakeVelTransform::odometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr & msg)
@@ -103,7 +92,7 @@ geometry_msgs::msg::Twist FakeVelTransform::transformVelocity(
   const geometry_msgs::msg::Twist & twist, float yaw_diff)
 {
   geometry_msgs::msg::Twist aft_tf_vel;
-  aft_tf_vel.angular.z = twist.angular.z + spin_speed_;
+  aft_tf_vel.angular.z = twist.angular.z;
   aft_tf_vel.linear.x = twist.linear.x * cos(yaw_diff) + twist.linear.y * sin(yaw_diff);
   aft_tf_vel.linear.y = -twist.linear.x * sin(yaw_diff) + twist.linear.y * cos(yaw_diff);
   return aft_tf_vel;

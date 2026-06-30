@@ -19,7 +19,6 @@
 #include <mutex>
 #include <string>
 
-#include "example_interfaces/msg/float32.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -36,13 +35,11 @@ public:
 private:
   void odometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr & msg);
   void cmdVelCallback(const geometry_msgs::msg::TwistStamped::SharedPtr msg);
-  void cmdSpinCallback(example_interfaces::msg::Float32::SharedPtr msg);
   void publishTransform();
   geometry_msgs::msg::Twist transformVelocity(
     const geometry_msgs::msg::Twist & twist, float yaw_diff);
 
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_sub_;
-  rclcpp::Subscription<example_interfaces::msg::Float32>::SharedPtr cmd_spin_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_chassis_pub_;
@@ -54,10 +51,8 @@ private:
   std::string robot_base_frame_;
   std::string fake_robot_base_frame_;
   std::string odom_topic_;
-  std::string cmd_spin_topic_;
   std::string input_cmd_vel_topic_;
   std::string output_cmd_vel_topic_;
-  float spin_speed_;
 
   std::mutex angle_mutex_;
   double current_robot_base_angle_{0.0};
