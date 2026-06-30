@@ -27,8 +27,12 @@ const TacticalState & Strategy::evaluate(const Ctx & c) const
   return states.back();
 }
 
-BehaviorMachine::BehaviorMachine(Strategy strategy, GoalPublisher * goal)
-: strategy_(std::move(strategy)), goal_(goal)
+BehaviorMachine::BehaviorMachine(
+  Strategy strategy, GoalPublisher * goal, bool follow_enable, double follow_staleness_sec)
+: strategy_(std::move(strategy)),
+  goal_(goal),
+  follow_enable_(follow_enable),
+  follow_staleness_sec_(follow_staleness_sec)
 {
 }
 
@@ -62,6 +66,18 @@ void BehaviorMachine::tick(const Ctx & c)
     return;
   }
 
+  // FOLLOW: 最高优先父 guard, 动态目标 (节点已算好 map 系 standoff 目标), 抢占战术层。
+  // 仅当 启用 && 目标有效 && 未过期 才触发; 否则落回原战术 guard 表, 现有策略与不变量不受影响。
+  if (follow_enable_ && c.target.valid) {
+    const double age = (c.now.nanoseconds() - c.target.stamp.nanoseconds()) * 1e-9;
+    if (age >= 0.0 && age <= follow_staleness_sec_) {
+      tactical_leaf_ = "FOLLOW";
+      current_goal_ = c.target.goal;
+      goal_->request(c.target.goal);
+      return;
+    }
+  }
+
   const TacticalState & s = strategy_.evaluate(c);
   tactical_leaf_ = s.id;
   current_goal_ = s.goal;
@@ -73,7 +89,10 @@ void BehaviorMachine::tick(const Ctx & c)
 std::vector<std::string> BehaviorMachine::tactical_state_ids() const
 {
   std::vector<std::string> ids;
-  ids.reserve(strategy_.states.size());
+  ids.reserve(strategy_.states.size() + 1);
+  if (follow_enable_) {
+    ids.push_back("FOLLOW");
+  }
   for (const auto & s : strategy_.states) {
     ids.push_back(s.id);
   }

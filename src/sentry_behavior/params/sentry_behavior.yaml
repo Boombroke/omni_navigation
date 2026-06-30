@@ -11,3 +11,11 @@ sentry_behavior_node:
     patrol_hp_min: 300
     ammo_min: 1
     outpost_hp_min: 1
+    # 跟随模式 (最高优先; 收到有效 TrackGoal 时抢占战术层)
+    enable_follow: true                # 关掉则永不跟随, 退回纯战术决策
+    target_topic: vision/target_body   # TrackGoal (车体系); rm_serial_driver 串口解析后发布
+    chassis_frame: chassis             # TrackGoal 所在车体系
+    map_frame: map                     # 跟随目标输出系
+    follow_standoff_dist: 1.5          # 与目标保持距离 [m] (远则趋近 / 近则后退)
+    follow_staleness_sec: 0.5          # 目标超时 [s], 超过则丢目标回落战术层
+    follow_deadband: 0.15              # 目标移动死区 [m], 小于则不刷新, 抑制 /goal_pose 抖动

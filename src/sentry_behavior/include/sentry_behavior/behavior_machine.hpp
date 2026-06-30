@@ -26,9 +26,17 @@
 namespace sentry_behavior
 {
 
+struct TargetSnapshot
+{
+  bool valid = false;
+  GoalCmd goal;            // 已变换到 map 系并应用 standoff 的跟随目标 (由节点算好)
+  rclcpp::Time stamp;      // 目标测量时刻 (staleness 判定)
+};
+
 struct Ctx
 {
   const RefereeSnapshot & referee;
+  const TargetSnapshot & target;
   rclcpp::Time now;
 };
 
@@ -55,7 +63,8 @@ enum class Phase { WAIT_START, IN_MATCH };
 class BehaviorMachine
 {
 public:
-  BehaviorMachine(Strategy strategy, GoalPublisher * goal);
+  BehaviorMachine(
+    Strategy strategy, GoalPublisher * goal, bool follow_enable, double follow_staleness_sec);
 
   void tick(const Ctx & c);
 
@@ -71,6 +80,8 @@ private:
 
   Strategy strategy_;
   GoalPublisher * goal_;
+  bool follow_enable_;
+  double follow_staleness_sec_;
   Phase phase_ = Phase::WAIT_START;
   std::string tactical_leaf_;
   std::optional<GoalCmd> current_goal_;

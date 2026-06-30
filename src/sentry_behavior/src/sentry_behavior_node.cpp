@@ -11,6 +11,7 @@
 // limitations under the License.
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -23,11 +24,17 @@
 #include "rm_interfaces/msg/game_robot_hp.hpp"
 #include "rm_interfaces/msg/game_status.hpp"
 #include "rm_interfaces/msg/robot_status.hpp"
+#include "rm_interfaces/msg/track_goal.hpp"
 #include "sentry_behavior/behavior_machine.hpp"
 #include "sentry_behavior/goal_publisher.hpp"
 #include "sentry_behavior/referee_snapshot.hpp"
 #include "sentry_behavior/strategies.hpp"
 #include "sentry_behavior/viz/state_viz_server.hpp"
+#include "tf2/LinearMath/Transform.h"
+#include "tf2/time.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#include "tf2_ros/buffer.h"
+#include "tf2_ros/transform_listener.h"
 
 namespace sentry_behavior
 {
@@ -97,6 +104,15 @@ public:
     params.ammo_min = declare_parameter<int>("ammo_min", params.ammo_min);
     params.outpost_hp_min = declare_parameter<int>("outpost_hp_min", params.outpost_hp_min);
 
+    const bool enable_follow = declare_parameter<bool>("enable_follow", true);
+    const double follow_staleness_sec = declare_parameter<double>("follow_staleness_sec", 0.5);
+    follow_standoff_dist_ = declare_parameter<double>("follow_standoff_dist", 1.5);
+    follow_deadband_ = declare_parameter<double>("follow_deadband", 0.15);
+    map_frame_ = declare_parameter<std::string>("map_frame", "map");
+    chassis_frame_ = declare_parameter<std::string>("chassis_frame", "chassis");
+    const std::string target_topic =
+      declare_parameter<std::string>("target_topic", "vision/target_body");
+
     if (tick_frequency <= 0.0) {
       throw std::runtime_error("tick_frequency must be > 0");
     }
@@ -104,7 +120,8 @@ public:
     Strategy strategy = make_strategy(strategy_name, params);
 
     goal_pub_ = std::make_unique<GoalPublisher>(this, "/goal_pose");
-    machine_ = std::make_unique<BehaviorMachine>(std::move(strategy), goal_pub_.get());
+    machine_ = std::make_unique<BehaviorMachine>(
+      std::move(strategy), goal_pub_.get(), enable_follow, follow_staleness_sec);
 
     if (viz_enable) {
       viz_server_ = std::make_unique<StateVizServer>(
@@ -134,11 +151,17 @@ public:
         snapshot_.outpost_valid = true;
       });
 
+    tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
+    tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
+    target_sub_ = create_subscription<rm_interfaces::msg::TrackGoal>(
+      target_topic, qos,
+      [this](const rm_interfaces::msg::TrackGoal::SharedPtr msg) {on_target(msg);});
+
     const auto period = std::chrono::duration<double>(1.0 / tick_frequency);
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(period),
       [this]() {
-        Ctx ctx{snapshot_, now()};
+        Ctx ctx{snapshot_, target_snapshot_, now()};
         machine_->tick(ctx);
         if (viz_server_) {
           const int64_t t_ms = now().nanoseconds() / 1000000;
@@ -158,7 +181,60 @@ public:
   }
 
 private:
+  void on_target(const rm_interfaces::msg::TrackGoal::SharedPtr & msg)
+  {
+    if (!msg->valid) {
+      target_snapshot_.valid = false;
+      return;
+    }
+    geometry_msgs::msg::TransformStamped tf;
+    try {
+      // 非阻塞取最新 TF (自旋移除后无需按测量时刻精确对齐), 避免阻塞 20Hz 决策 tick
+      tf = tf_buffer_->lookupTransform(map_frame_, chassis_frame_, tf2::TimePointZero);
+    } catch (const tf2::TransformException &) {
+      return;  // 变换暂不可用: 不刷新, staleness 自然失效后回落战术层
+    }
+    tf2::Transform t;
+    tf2::fromMsg(tf.transform, t);
+    const tf2::Vector3 target_map = t * tf2::Vector3(msg->rel_x, msg->rel_y, 0.0);
+    const tf2::Vector3 robot_map = t.getOrigin();
+    const double dx = target_map.x() - robot_map.x();
+    const double dy = target_map.y() - robot_map.y();
+    const double dist = std::hypot(dx, dy);
+    double gx = robot_map.x();
+    double gy = robot_map.y();
+    if (dist > 1e-3) {
+      // standoff 带: s>0 远则趋近 / s<0 近则后退, 维持"不远不近"的相对距离
+      const double s = (dist - follow_standoff_dist_) / dist;
+      gx = robot_map.x() + dx * s;
+      gy = robot_map.y() + dy * s;
+    }
+    if (last_follow_valid_ &&
+      std::hypot(gx - last_follow_x_, gy - last_follow_y_) < follow_deadband_)
+    {
+      // 死区: 抑制目标抖动引起的 /goal_pose churn (配合 GoalPublisher 精确去重)
+      gx = last_follow_x_;
+      gy = last_follow_y_;
+    }
+    last_follow_x_ = gx;
+    last_follow_y_ = gy;
+    last_follow_valid_ = true;
+    target_snapshot_.goal = GoalCmd{gx, gy, std::atan2(dy, dx)};
+    target_snapshot_.stamp = rclcpp::Time(msg->header.stamp);
+    target_snapshot_.valid = true;
+  }
+
   RefereeSnapshot snapshot_;
+  TargetSnapshot target_snapshot_;
+  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
+  std::string map_frame_;
+  std::string chassis_frame_;
+  double follow_standoff_dist_ = 1.5;
+  double follow_deadband_ = 0.15;
+  double last_follow_x_ = 0.0;
+  double last_follow_y_ = 0.0;
+  bool last_follow_valid_ = false;
   std::unique_ptr<GoalPublisher> goal_pub_;
   std::unique_ptr<BehaviorMachine> machine_;
   std::unique_ptr<StateVizServer> viz_server_;
@@ -166,6 +242,7 @@ private:
   rclcpp::Subscription<rm_interfaces::msg::GameStatus>::SharedPtr game_sub_;
   rclcpp::Subscription<rm_interfaces::msg::RobotStatus>::SharedPtr robot_sub_;
   rclcpp::Subscription<rm_interfaces::msg::GameRobotHP>::SharedPtr hp_sub_;
+  rclcpp::Subscription<rm_interfaces::msg::TrackGoal>::SharedPtr target_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 
