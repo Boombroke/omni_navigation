@@ -41,6 +41,10 @@ private:
     const tf2::Transform & transform, const std::string & parent_frame,
     const std::string & child_frame, const rclcpp::Time & stamp);
 
+  void publishChassisOdometry(
+    const tf2::Transform & transform, const std::string & parent_frame,
+    const std::string & child_frame, const rclcpp::Time & stamp);
+
   std::string state_estimation_topic_;
   std::string registered_scan_topic_;
   std::string odom_frame_;
@@ -56,6 +60,7 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometry_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr registered_scan_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr lidar_odometry_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr chassis_odometry_pub_;
   rclcpp::Publisher<geometry_msgs::msg::TransformStamped>::SharedPtr odom_to_lidar_odom_pub_;
 
   message_filters::Subscriber<nav_msgs::msg::Odometry> odometry_sub_;
@@ -71,6 +76,10 @@ private:
   bool has_previous_transform_;
   tf2::Transform previous_transform_;
   std::chrono::steady_clock::time_point previous_time_;
+
+  bool has_previous_chassis_transform_;
+  tf2::Transform previous_chassis_transform_;
+  rclcpp::Time previous_chassis_time_;
 };
 
 }

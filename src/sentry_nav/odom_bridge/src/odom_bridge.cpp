@@ -16,7 +16,9 @@ OdomBridgeNode::OdomBridgeNode(const rclcpp::NodeOptions & options)
   tf_odom_to_lidar_odom_(tf2::Transform::getIdentity()),
   has_previous_transform_(false),
   previous_transform_(tf2::Transform::getIdentity()),
-  previous_time_(std::chrono::steady_clock::time_point::min())
+  previous_time_(std::chrono::steady_clock::time_point::min()),
+  has_previous_chassis_transform_(false),
+  previous_chassis_transform_(tf2::Transform::getIdentity())
 {
   this->declare_parameter<std::string>("state_estimation_topic", "aft_mapped_to_init");
   this->declare_parameter<std::string>("registered_scan_topic", "cloud_registered");
@@ -40,6 +42,7 @@ OdomBridgeNode::OdomBridgeNode(const rclcpp::NodeOptions & options)
   odometry_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("odometry", 2);
   registered_scan_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("registered_scan", 5);
   lidar_odometry_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("lidar_odometry", 5);
+  chassis_odometry_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("chassis_odometry", 2);
 
   rclcpp::QoS latched_qos(1);
   latched_qos.transient_local();
@@ -124,6 +127,7 @@ void OdomBridgeNode::lidarOdometryAndPointCloudCallback(
 
   publishTransform(tf_odom_to_chassis, odom_frame_, base_frame_, pcd_msg->header.stamp);
   publishOdometry(tf_odom_to_robot_base, odom_frame_, robot_base_frame_, pcd_msg->header.stamp);
+  publishChassisOdometry(tf_odom_to_chassis, odom_frame_, base_frame_, pcd_msg->header.stamp);
 
   sensor_msgs::msg::PointCloud2 sensor_scan;
   pcl_ros::transformPointCloud(
@@ -216,6 +220,50 @@ void OdomBridgeNode::publishOdometry(
   }
 
   odometry_pub_->publish(out);
+}
+
+void OdomBridgeNode::publishChassisOdometry(
+  const tf2::Transform & transform, const std::string & parent_frame,
+  const std::string & child_frame, const rclcpp::Time & stamp)
+{
+  nav_msgs::msg::Odometry out;
+  out.header.stamp = stamp;
+  out.header.frame_id = parent_frame;
+  out.child_frame_id = child_frame;
+
+  const auto & origin = transform.getOrigin();
+  out.pose.pose.position.x = origin.x();
+  out.pose.pose.position.y = origin.y();
+  out.pose.pose.position.z = origin.z();
+  out.pose.pose.orientation = tf2::toMsg(transform.getRotation());
+
+  if (has_previous_chassis_transform_) {
+    const double dt = (stamp - previous_chassis_time_).seconds();
+    if (dt > 0.0) {
+      // Twist 在 odom 惯性轴系表达 (origin 差分), angular.z = 底盘 yaw 率; 与 MPPI 规划系
+      // gimbal_yaw_fake (惯性对齐) 一致, 不含云台独立瞄准角速度 (区别于 gimbal_yaw 系的 odometry)
+      const auto linear_velocity =
+        (transform.getOrigin() - previous_chassis_transform_.getOrigin()) / dt;
+      const tf2::Quaternion q_diff =
+        transform.getRotation() * previous_chassis_transform_.getRotation().inverse();
+      const auto angular_velocity = q_diff.getAxis() * q_diff.getAngle() / dt;
+
+      out.twist.twist.linear.x = linear_velocity.x();
+      out.twist.twist.linear.y = linear_velocity.y();
+      out.twist.twist.linear.z = linear_velocity.z();
+      out.twist.twist.angular.x = angular_velocity.x();
+      out.twist.twist.angular.y = angular_velocity.y();
+      out.twist.twist.angular.z = angular_velocity.z();
+    }
+    previous_chassis_transform_ = transform;
+    previous_chassis_time_ = stamp;
+  } else {
+    previous_chassis_transform_ = transform;
+    previous_chassis_time_ = stamp;
+    has_previous_chassis_transform_ = true;
+  }
+
+  chassis_odometry_pub_->publish(out);
 }
 
 }
