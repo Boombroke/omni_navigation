@@ -544,8 +544,8 @@ planner_server:
       plugin: "nav2_smac_planner::SmacPlanner2D"
       tolerance: 0.5
       allow_unknown: true
-      downsample_costmap: false
-      downsampling_factor: 1
+      downsample_costmap: true            # P1: 在降采样图上规划, 5cm→10cm 等效, 规划提速 2-4x
+      downsampling_factor: 2              # 注意: 10cm 栅格下 <~0.7m 窄缝需实车确认可通过
       max_iterations: 1000000
       max_on_approach_iterations: 1000
       max_planning_time: 5.0              # 单次规划允许跑满，避免被中途 abort 后 BT RecoveryNode 反复重试 (1s × 3 retries = 4s 长尾)
@@ -556,7 +556,7 @@ planner_server:
         w_smooth: 0.3
         w_data: 0.2
         tolerance: 1.0e-10
-        do_refinement: false              # refinement 再跑一遍 max_iterations，关掉省时
+        do_refinement: true               # P1: 开启精细化, 路径更柔和(上游作者注: 显著更好); downsample 已省出时间预算
 
 smoother_server:
   ros__parameters:
