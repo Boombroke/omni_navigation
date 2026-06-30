@@ -13,11 +13,13 @@
                             │    referee/robot_status  (RobotStatus) -> hp / ammo
                             │    referee/all_robot_hp   (GameRobotHP) -> outpost_hp
                             │
+vision/target_body ─────────┤  TrackGoal (rm_interfaces/msg/TrackGoal) -> 跟随目标
                             ▼
                   SingleThreadedExecutor + 20Hz Timer
                             │
                             ▼
                   BehaviorMachine (2 层 HSM)
+                    ├─ FOLLOW 父 guard (最高优先): TrackGoal 有效且未过期时抢占战术层
                     ├─ 生命周期层: WAIT_START <-> IN_MATCH (reactive 父 guard)
                     └─ 战术层: 按 strategy 选的 guard 表 (首个命中者胜)
                             │
@@ -28,6 +30,7 @@
 
 ### 2 层分层状态机
 
+- **FOLLOW 父 guard（最高优先）**:收到有效且未过期的 `TrackGoal`(来自 `vision/target_body`)时立即抢占战术层,向 `/goal_pose` 发布 standoff 跟随目标;超时或无有效目标后自动回落至生命周期层/战术层。见[跟随模式](#跟随模式)。
 - **生命周期层（唯一真有状态）**:`WAIT_START ↔ IN_MATCH`。每 tick 先判 reactive 父 guard(等价旧树 `ReactiveFallback[Inverter(IsGameStatus), 主决策]`):比赛中 `game_progress` 离开 4 立即转 `WAIT_START`、复位战术层并清 `GoalPublisher` 去重缓存,主决策被抢占。
 - **战术层（无状态）**:每个策略 = 一张按优先级排序的 `guard 表`,逐项求值,首个 `active` 命中者保持其目标;末项为无条件兜底。
 
@@ -53,6 +56,34 @@
 
 阈值是节点参数(`rmuc_hp_min` / `attack_hp_min` / `patrol_hp_min` / `ammo_min` / `outpost_hp_min`),不重编即可调。
 
+## 跟随模式
+
+`FOLLOW` guard 优先级在所有战术层之上。收到有效且未过期的 `TrackGoal`(消息类型 `rm_interfaces/msg/TrackGoal`,由视觉链发布于 `vision/target_body`,车体系相对位姿)时,节点用 tf2 将目标从 `chassis` 系变换到 `map` 系,加入 standoff 带(远趋近/近后退)计算跟随目标点,再发布到 `/goal_pose`。目标静止死区(`follow_deadband`)内不重发,防止抖动。消息时间戳超过 `follow_staleness_sec` 后自动回落原策略(`rmuc_defend/a/b` 及 7 条不变量不受影响)。
+
+> **串口 RX 侧尚未实现**:当前 MCU/串口侧尚未发布 `TrackGoal`。功能闭环需待 MCU/串口侧实现后验证。
+
+### 参数(`params/sentry_behavior.yaml` 跟随相关)
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `enable_follow` | `true` | 是否启用 FOLLOW guard |
+| `target_topic` | `vision/target_body` | TrackGoal 订阅话题 |
+| `chassis_frame` | `chassis` | 目标位姿所在坐标系 |
+| `map_frame` | `map` | 发布目标的全局坐标系 |
+| `follow_standoff_dist` | `1.5` | 跟随保持距离 (m)，远时趋近、近时后退 |
+| `follow_staleness_sec` | `0.5` | TrackGoal 时间戳超时阈值 (s)，超时回落战术层 |
+| `follow_deadband` | `0.15` | 目标位移小于此值时不重发 `/goal_pose` (m) |
+
+### Mock 测试
+
+```bash
+source install/setup.bash
+tests/follow_smoke.sh    # mock 30Hz 运动目标，验 standoff/跟踪/staleness 回落，无硬件
+python3 tests/follow_mock.py  # 独立 mock 脚本，30Hz 发布 TrackGoal
+```
+
+> `follow_smoke.sh` 不修改 `inv_smoke.sh` 的 7 条不变量;两套测试互相独立。
+
 ## ROS 接口
 
 | 接口 | 类型 | 说明 |
@@ -60,6 +91,7 @@
 | `referee/game_status` | `rm_interfaces/msg/GameStatus` | 订阅;`game_progress`(4=比赛中,5=结算)、`stage_remain_time` |
 | `referee/robot_status` | `rm_interfaces/msg/RobotStatus` | 订阅;`current_hp`、`projectile_allowance_17mm`(弹量) |
 | `referee/all_robot_hp` | `rm_interfaces/msg/GameRobotHP` | 订阅;`ally_outpost_hp`(前哨血量,b 用) |
+| `vision/target_body` | `rm_interfaces/msg/TrackGoal` | 订阅;车体系相对位姿,供 FOLLOW guard 使用(待 MCU/串口侧实现) |
 | `/goal_pose` | `geometry_msgs/PoseStamped` | 发布;`frame_id=map`,Nav2 `bt_navigator` 消费 |
 
 订阅 QoS:`reliable + volatile, depth 10`。
@@ -79,6 +111,14 @@ sentry_behavior_node:
     patrol_hp_min: 300
     ammo_min: 1
     outpost_hp_min: 1
+    # 跟随模式参数
+    enable_follow: true
+    target_topic: vision/target_body
+    chassis_frame: chassis
+    map_frame: map
+    follow_standoff_dist: 1.5
+    follow_staleness_sec: 0.5
+    follow_deadband: 0.15
 ```
 
 未知 `strategy` 名启动即 `FATAL` 退出(不静默回退)。

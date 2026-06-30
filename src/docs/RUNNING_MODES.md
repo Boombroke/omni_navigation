@@ -63,7 +63,7 @@ Nav2 bt_navigator (Nav2 导航 BT)
     │  决定 "怎么去"
     │  ComputePathToPose → FollowPath
     v
-omni_pid_pursuit_controller (局部控制)
+nav2_mppi_controller (局部控制，全向 Omni 运动模型)
 ```
 
 - **战术决策层** (`sentry_behavior`): 自研分层状态机（无 BehaviorTree），裁判系统驱动，向 `/goal_pose` 发布目标点。
@@ -205,6 +205,12 @@ ros2 launch sentry_behavior sentry_behavior_launch.py use_sim_time:=False strate
 | `tick_frequency` | `20.0` | 状态机主循环频率 (Hz) |
 | `viz_enable` / `viz_port` | `true` / `1667` | 内嵌 TCP NDJSON 状态可视化协议(供独立 Rust/C 客户端) |
 | `rmuc_hp_min`/`attack_hp_min`/`patrol_hp_min`/`ammo_min`/`outpost_hp_min` | `151/300/300/1/1` | 战术阈值 |
+| `enable_follow` | `true` | 启用 FOLLOW guard（最高优先，抢占战术层） |
+| `target_topic` | `vision/target_body` | TrackGoal 订阅话题（待 MCU/串口侧实现） |
+| `chassis_frame` / `map_frame` | `chassis` / `map` | tf2 变换坐标系 |
+| `follow_standoff_dist` | `1.5` | 跟随保持距离 (m) |
+| `follow_staleness_sec` | `0.5` | TrackGoal 超时回落战术层 (s) |
+| `follow_deadband` | `0.15` | 目标位移抑抖死区 (m) |
 
 ### 策略与坐标
 
@@ -396,19 +402,15 @@ ros2 launch location map_visualizer_launch.py
 | `downsample_costmap` | `false` | 是否对代价地图进行下采样 |
 | `max_iterations` | `1000000` | 最大搜索迭代次数，-1 禁用 |
 
-### 6.2 局部控制器 - OmniPidPursuitController
+### 6.2 局部控制器 - nav2_mppi_controller::MPPIController
 
-实车使用此控制器：
+实车使用 Nav2 官方 MPPI 控制器，全向 Omni 运动模型，`odom_topic` 指向 `chassis_odometry`（底盘系扭矩，与云台朝向解耦）。详细参数见 `sentry_nav_bringup/config/reality/nav2_params.yaml` 的 `controller_server:` 段。
 
-| 参数 | 值 | 说明 |
+| 参数（摘要） | 值 | 说明 |
 |:---|:---|:---|
-| `lookahead_dist` | `2.0` | 前瞻距离 (m) |
-| `v_linear_max` | `2.5` | 最大线速度 (m/s) |
-| `v_angular_max` | `3.0` | 最大角速度 (rad/s) |
-| `curvature_max` | `1.0` | 触发减速的最大曲率阈值 |
-| `reduction_ratio` | `0.5` | 高曲率时速度缩减比例 |
-| `enable_rotation` | `false` | 是否旋转到目标朝向（全向底盘不需要） |
-| `target_frame` | `gimbal_yaw_fake` | 控制器参考坐标系 |
+| `motion_model` | `Omni` | 全向底盘运动模型 |
+| `odom_topic` | `chassis_odometry` | 里程计输入（底盘系，不受云台旋转影响） |
+| `target_frame` | `gimbal_yaw_fake` | 控制器参考坐标系（虚拟惯性系） |
 
 ### 6.3 代价地图 (Costmap2D)
 

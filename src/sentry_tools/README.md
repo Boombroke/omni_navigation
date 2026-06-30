@@ -285,14 +285,14 @@ python3 src/sentry_tools/serial_visualizer.py
 | Topic | 用途 |
 |---|---|
 | `cmd_vel_nav2_result` | 导航命令速度（world 系，fake_vel_transform 之前，无自旋） |
-| `cmd_vel` | 最终下发速度（body 系 + spin_speed，fake_vel_transform 之后） |
+| `cmd_vel` | 经 fake_vel_transform 坐标旋转后的 body 系速度（ROS 无自旋叠加，fake_vel_transform 之后） |
 | `odometry` | 实际速度（world 系，odom_bridge 位置差分） |
 | `serial/gimbal_joint_state` | 云台关节状态 |
 | `referee/game_status` | 比赛阶段 + 倒计时 |
 | `referee/robot_status` | 血量 + 弹量 |
 | `referee/all_robot_hp` | 全队血量 |
 
-> ⚠️ 速度对比只能用 `cmd_vel_nav2_result`（world 系）vs `odometry`（world 系）。不能用 `cmd_vel`（body 系+自旋 3.14 rad/s），详见 AGENTS.md 第 4 节。
+> ⚠️ 速度对比只能用 `cmd_vel_nav2_result`（world 系）vs `odometry`（world 系）。不能用 `cmd_vel`（body 系，坐标旋转后，与 world 系不同），详见 AGENTS.md 第 4 节。
 
 **完整联调 4 终端：**
 

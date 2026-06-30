@@ -28,7 +28,8 @@
 | 话题 | 类型 | 说明 |
 |------|------|------|
 | `sensor_scan` | `sensor_msgs/msg/PointCloud2` | 注册点云转换到 `lidar_frame` |
-| `odometry` | `nav_msgs/msg/Odometry` | `odom` → `robot_base_frame`，含位置差分速度 |
+| `odometry` | `nav_msgs/msg/Odometry` | `odom` → `robot_base_frame`（`gimbal_yaw` 系），含位置差分速度 |
+| `chassis_odometry` | `nav_msgs/msg/Odometry` | `odom` → `base_footprint`（底盘系），twist 线速度在 odom 惯性轴、angular.z 为底盘 yaw 率；供 Nav2 MPPI 控制器速度反馈 |
 | `registered_scan` | `sensor_msgs/msg/PointCloud2` | 注册点云在 `odom` 系，供下游使用 |
 | `lidar_odometry` | `nav_msgs/msg/Odometry` | `odom` → `lidar_frame` |
 | `odom_to_lidar_odom` | `geometry_msgs/msg/TransformStamped` | latched，`odom` → `lidar_odom` 静态偏移 |
@@ -55,6 +56,7 @@ Point-LIO
   ├─ aft_mapped_to_init  ──┐
   └─ cloud_registered    ──┴── odom_bridge ──┬── TF: odom → base_footprint  ──▶ Nav2
                                               ├── odometry                    ──▶ velocity_smoother
+                                              ├── chassis_odometry            ──▶ Nav2 MPPI 控制器（底盘系速度反馈）
                                               ├── registered_scan             ──▶ terrain_analysis
                                               │                               ──▶ small_gicp_relocalization
                                               ├── lidar_odometry              ──▶ terrain_analysis_ext

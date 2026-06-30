@@ -86,6 +86,18 @@ float64 radius_1 / radius_2          # 目标旋转半径
 float64 dz                           # 高度差
 ```
 
+#### TrackGoal.msg
+
+跟随目标消息，描述目标在车体系下的相对位姿。由 `rm_serial_driver` 从串口解析后发布（串口 RX 侧待 MCU 实现），供 `sentry_behavior` 跟随模式消费。
+
+```
+std_msgs/Header header    # frame_id=chassis，stamp=测量时刻
+float32 rel_x             # 目标在车体系的相对 X 位移（m）
+float32 rel_y             # 目标在车体系的相对 Y 位移（m）
+float32 rel_yaw           # 目标相对偏航角（rad）
+bool valid                # 目标是否有效
+```
+
 ## 编译
 
 ```bash

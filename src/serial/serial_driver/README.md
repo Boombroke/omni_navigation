@@ -70,7 +70,7 @@ serial/serial_driver/
 |------|------|------|------|
 | lx | float | m/s | body 系前向线速度 |
 | ly | float | m/s | body 系侧向线速度 |
-| az | float | rad/s | 底盘角速度 / 自旋速度 |
+| az | float | rad/s | 底盘角速度（导航转向） |
 | mode | uint8 | — | 0=normal 1=spin_low 2=spin_high 3=estop |
 | ros_state | uint8 | — | 0=init 1=ready 2=running 3=fault |
 
@@ -158,7 +158,7 @@ ros2 launch rm_serial_driver serial_driver.launch.py device_name:=/dev/ttyUSB0
 
 - ROS 端与电控端的结构体必须保持严格的字节对齐，协议变更时两端必须同步更新。
 - CRC16 校验算法两端必须一致（采用查表法，初始值为 0xFFFF）。
-- `/cmd_vel_chassis` 是绝对路径话题，接收的是经 `fake_vel_transform` 转换后的 body 系速度（含自旋叠加）。
+- `/cmd_vel_chassis` 是绝对路径话题，接收的是经 `fake_vel_transform` 转换后的 body 系速度（坐标旋转解耦云台瞄准，ROS 无自旋叠加）。
 - 驱动具备自动重连机制，串口断开后会以 1s 为间隔尝试重新打开设备。
 - 本包特有的 CMake 配置将 C++ 标准设为 C++14（项目其他包通常使用 C++17）。
 - `package.xml` 中保留了部分历史遗留的未使用依赖（如 `auto_nav_interfaces`, `visualization_msgs` 等）。

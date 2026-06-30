@@ -17,9 +17,10 @@
 
 ## 核心设计
 
-**自旋底盘 + 虚拟惯性系**：底盘持续自旋，`gimbal_yaw_fake` 与 `gimbal_yaw` 反向旋转，
-使 Nav2 规划器始终在稳定的惯性系中工作。`fake_vel_transform` 在执行端把 Nav2 输出旋回真实系
-并叠加自旋速度分量，再发往底盘。
+**全向底盘 + 虚拟惯性系**：底盘持续自旋，`gimbal_yaw_fake` 与 `gimbal_yaw` 反向旋转，
+使 Nav2 规划器始终在稳定的惯性系中工作。`fake_vel_transform` 在执行端把 Nav2 输出从
+`gimbal_yaw_fake` 系旋回真实 `gimbal_yaw` 系（坐标旋转解耦云台独立瞄准），再发往底盘。
+ROS 侧不叠加自旋，物理自旋（若启用）由 MCU 固件负责。
 
 ### TF 树
 
@@ -35,12 +36,15 @@ map → odom → base_footprint → chassis → gimbal_yaw → gimbal_pitch → 
 
 ```
 controller_server     →  cmd_vel_controller   (remap: cmd_vel → cmd_vel_controller)
+                                              (局部控制器: nav2_mppi_controller::MPPIController, motion_model=Omni)
+                                              (odom_topic: chassis_odometry)
                                 ↓
 velocity_smoother     订阅 cmd_vel_controller  (remap 输入)
                       发布 cmd_vel_nav2_result (remap: cmd_vel_smoothed → cmd_vel_nav2_result)
                                 ↓
 fake_vel_transform    订阅 cmd_vel_nav2_result (input_cmd_vel_topic)
                       发布 cmd_vel_chassis     (output_cmd_vel_topic)
+                      (坐标旋转: gimbal_yaw_fake → gimbal_yaw，ROS 无自旋叠加)
                                 ↓
         实车: rm_serial_driver 订阅 /cmd_vel_chassis
 ```
@@ -176,7 +180,7 @@ bringup_launch.py
         ├── terrain_analysis
         ├── terrain_analysis_ext
         ├── odom_bridge             (发布 odom→base_footprint TF + odometry 话题)
-        ├── fake_vel_transform      (速度坐标旋转 + 自旋叠加)
+        ├── fake_vel_transform      (速度坐标旋转，解耦云台瞄准，ROS 无自旋叠加)
         ├── controller_server       → cmd_vel_controller
         ├── velocity_smoother       订阅 cmd_vel_controller → 发布 cmd_vel_nav2_result
         ├── planner_server
@@ -193,7 +197,6 @@ bringup_launch.py
 | `cmd_vel_controller` | `TwistStamped` | 发布 | `controller_server`（remap from `cmd_vel`） |
 | `cmd_vel_nav2_result` | `TwistStamped` | 发布 | `velocity_smoother`（remap from `cmd_vel_smoothed`） |
 | `cmd_vel_chassis` | `Twist` | 发布 | `fake_vel_transform` |
-| `cmd_spin` | `std_msgs/Float32` | 订阅 | `fake_vel_transform`（动态设置自旋速度） |
 | `odometry` | `nav_msgs/Odometry` | 发布 | `odom_bridge` |
 | `aft_mapped_to_init` | `nav_msgs/Odometry` | 订阅 | `odom_bridge`（来自 point_lio） |
 | `cloud_registered` | `sensor_msgs/PointCloud2` | 订阅 | `odom_bridge`（已配准点云） |

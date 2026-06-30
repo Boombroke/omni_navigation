@@ -9,7 +9,7 @@ sentry_nav 是哨兵机器人自主导航系统的顶层元包。它通过依赖
 - **livox_ros_driver2**: Livox 激光雷达的 ROS2 驱动程序，负责原始数据采集。
 - **odom_bridge**: 里程计桥接节点。合并了原 loam_interface 和 sensor_scan_generation，在单次同步回调中完成 lidar_odom→odom 变换、2D 约束、TF 广播、速度计算和点云转换。
 - **nav2_plugins**: 自定义 Nav2 插件集合，包含强度体素层 (intensity_voxel_layer) 等。
-- **omni_pid_pursuit_controller**: 专为全向轮底盘设计的 PID 路径追踪控制器。
+- **omni_pid_pursuit_controller**: 专为全向轮底盘设计的 PID 路径追踪控制器（默认局部控制器已换为 `nav2_mppi_controller::MPPIController` Omni 模式，本包保留作回退）。
 - **teleop_twist_joy**: 支持 PS4 等标准手柄的远程控制模块。
 - **fake_vel_transform**: 速度矢量在不同坐标系之间的转换工具。
 - **pointcloud_to_laserscan**: 将三维点云数据投影为二维激光扫描数据，兼容传统导航算法。

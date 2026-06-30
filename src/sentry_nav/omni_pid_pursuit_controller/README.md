@@ -6,6 +6,8 @@
 
 `omni_pid_pursuit_controller` 是专为全向麦克纳姆底盘设计的 Nav2 控制器插件，实现纯跟踪（Pure Pursuit）+ 双 PID（平移 / 旋转）的路径跟踪算法。
 
+> **注意**：默认局部控制器已切换为 `nav2_mppi_controller::MPPIController`（Omni 全向，预测性平滑避障）；本包保留作回退方案（`git revert` 可切回）。下方文档描述本控制器自身。
+
 **插件类名**：`omni_pid_pursuit_controller::OmniPidPursuitController`
 **插件基类**：`nav2_core::Controller`
 
