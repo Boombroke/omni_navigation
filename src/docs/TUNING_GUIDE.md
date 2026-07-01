@@ -377,7 +377,57 @@ python3 src/sentry_tools/serial_visualizer.py
 
 ---
 
-## 七、快速诊断命令汇总
+## 七、MPPI 局部控制器 (Omni) 调优
+
+实车局部控制器为 `nav2_mppi_controller::MPPIController`（`motion_model: "Omni"`），配置在 `config/reality/nav2_params.yaml` 的 `controller_server: FollowPath:` 段。预测性采样控制、平滑避障；以下参数需在实车上调。
+
+### 20. batch_size / time_steps / model_dt（计算量 vs 预测质量）
+
+**当前值**：batch_size 1000 / time_steps 40 / model_dt 0.05（预测时域 2.0s）
+
+**影响**：
+- batch_size = 每周期采样的轨迹条数，越大避障越稳但 CPU 越高（官方 i5 实测 batch 2000 可跑 50Hz）。
+- time_steps × model_dt = 预测时域；`model_dt` **必须 ≥ 控制周期**（1/controller_frequency = 1/30 ≈ 0.033），否则 configure 直接报错。
+
+**调优方法（关键：MPPI 与 Point-LIO 共核，必须实测 CPU）**：
+```bash
+top -p $(pgrep -f "nav2_container|component_container")   # MPPI 所在容器 CPU
+top -p $(pgrep -f point_lio)                              # 确认 Point-LIO 未被饿到掉频
+ros2 topic hz cmd_vel_controller                          # 应接近 controller_frequency 30Hz
+```
+**判断标准**：
+- `cmd_vel_controller` 频率明显 < 30Hz 或 Point-LIO 掉频 → 降 batch_size（1000→800→500）或 time_steps
+- CPU 有余量、想要更稳的避障 → batch_size 上调到 1500~2000
+
+### 21. 速度 / 角速度限幅
+
+**当前值**：vx_max/vx_min ±1.5、vy_max 1.5（全向侧移）、wz_max 0.5（低）
+
+**要点**：
+- vx/vy_max 应 ≤ 底盘实际能力，且与 `velocity_smoother.max_velocity[0,1]`（1.5）一致，否则被下游截断。
+- **wz_max 故意压低（0.5）**：航向由自旋 / 云台负责（don't-care），底盘无需主动转向；太高会让底盘无谓空转、抖动。若发现跟踪需要更多转向可小幅上调。
+
+### 22. Critic 权重（行为倾向）
+
+**当前 critics**：ConstraintCritic / CostCritic / GoalCritic / PathAlignCritic / PathFollowCritic（已去掉航向类 GoalAngle/PathAngle/PreferForward，因朝向 don't-care）
+
+**主要旋钮**：
+- `CostCritic.cost_weight`（3.81）：↑ 避障更强、离障更远；↓ 更贴路径。避障不够果断 → 加大。
+- `PathAlignCritic.cost_weight`（14.0）：↑ 更贴全局路径；↓ 允许更大偏离绕障。
+- `PathFollowCritic.cost_weight`（5.0）：↑ 更快沿路径推进。
+- `ConstraintCritic.cost_weight`（4.0）：越界惩罚，一般不动。
+
+**调优方法**：临时开 `visualize: true` 在 RViz 看 MPPI 采样轨迹，观察避障是否果断、是否过度偏离路径；实战关闭以省 CPU。
+
+### 23. 速度反馈 odom_topic
+
+**当前值**：`chassis_odometry`（odom_bridge 底盘系，twist 与云台瞄准解耦）
+
+**要点**：必须用 `chassis_odometry` 而非 `odometry`——后者在 `gimbal_yaw` 系，云台大幅摆动时 `angular.z` 会被云台运动污染，使 MPPI rollout 初速度状态错误。实车用 `ros2 topic echo chassis_odometry` 确认：云台摆动、底盘不动时 `twist.angular.z ≈ 0`。
+
+---
+
+## 八、快速诊断命令汇总
 
 ```bash
 # Point-LIO 里程计频率（应接近 LiDAR 频率）
