@@ -97,6 +97,39 @@ install_system_deps() {
     ok "Python 工具依赖安装完成"
 }
 
+# ---------- 2b. 安装仿真依赖（Gazebo Harmonic + ros_gz）----------
+install_sim_deps() {
+    info "检测 Gazebo Harmonic 仿真依赖..."
+
+    # 检查 gz-harmonic 是否已安装
+    if command -v gz &>/dev/null && gz sim --version 2>/dev/null | grep -q "8\."; then
+        ok "Gazebo Harmonic 已安装"
+    else
+        info "安装 Gazebo Harmonic (gz-sim8)..."
+        sudo apt install -y gz-harmonic || warn "gz-harmonic 安装失败，仿真模式不可用（实车模式不受影响）"
+    fi
+
+    # ros_gz 桥接包
+    local ROS_GZ_PKGS=(
+        ros-jazzy-ros-gz-bridge
+        ros-jazzy-ros-gz-sim
+        ros-jazzy-ros-gz-image
+        ros-jazzy-ros-gz-interfaces
+    )
+    local missing=0
+    for pkg in "${ROS_GZ_PKGS[@]}"; do
+        dpkg -l "$pkg" &>/dev/null || missing=1
+    done
+
+    if [ "$missing" -eq 1 ]; then
+        info "安装 ros_gz 桥接包..."
+        sudo apt install -y "${ROS_GZ_PKGS[@]}" || warn "ros_gz 包安装失败，仿真模式不可用（实车模式不受影响）"
+        ok "ros_gz 桥接包安装完成"
+    else
+        ok "ros_gz 桥接包已安装"
+    fi
+}
+
 # ---------- 3. 安装 small_gicp ----------
 install_small_gicp() {
     if ldconfig -p 2>/dev/null | grep -q "small_gicp"; then
@@ -184,6 +217,9 @@ build_workspace() {
     info "实车导航启动:"
     echo -e "  ${GREEN}ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py use_robot_state_pub:=True${NC}"
     echo ""
+    info "仿真启动（Gazebo Harmonic）:"
+    echo -e "  ${GREEN}ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true${NC}"
+    echo ""
 }
 
 # ---------- 6. 配置环境变量 (可选) ----------
@@ -217,6 +253,7 @@ echo ""
 
 install_ros2_jazzy
 install_system_deps
+install_sim_deps
 install_small_gicp
 init_rosdep
 build_workspace

@@ -17,6 +17,15 @@ sudo apt install ros-jazzy-foxglove-bridge
 ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py use_foxglove:=true
 ```
 
+仿真环境：
+```bash
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true
+# 另开终端，单独起 foxglove_bridge（仿真 launch 中话题有 /red_standard_robot1/ 命名空间前缀）
+ros2 run foxglove_bridge foxglove_bridge --ros-args -p port:=8765 -p address:="0.0.0.0"
+```
+
+> **仿真命名空间提醒**：仿真话题含 `/red_standard_robot1/` 前缀（如 `/red_standard_robot1/cmd_vel_chassis`）。Foxglove 面板订阅时需带前缀，或在 3D 面板 Fixed Frame 设为 `map`。
+
 无头模式（无显示器的实车推荐）：
 ```bash
 ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py use_rviz:=false use_foxglove:=true
@@ -100,7 +109,7 @@ sudo ufw allow 8765/tcp
 | **Log** | ROS 日志 | `/rosout` |
 | **Topic List** | 话题频率监控 | 自动发现 |
 
-> **命名空间提醒**：实车默认命名空间为空，话题无前缀。
+> **命名空间提醒**：实车默认命名空间为空，话题无前缀。仿真默认命名空间 `/red_standard_robot1`，话题带前缀。
 
 ### 3.2 添加 3D 面板步骤
 
@@ -215,7 +224,7 @@ ros2 run foxglove_bridge foxglove_bridge --ros-args \
 | 看不到话题 | namespace 不匹配 | 实车默认无前缀；确认话题名 |
 | 3D 面板空白 | 没有选择 Fixed Frame | 在 3D 面板设置中把 Frame 改为 `map` |
 | 点云/costmap 卡顿 | 带宽不够 | 降频或用 topic_whitelist 限制 |
-| TF 报错 | use_sim_time 配置不对 | 实车恒为 false，确认 foxglove_bridge 与导航栈一致 |
+| TF 报错 | use_sim_time 配置不对 | 实车恒为 false，仿真恒为 true；确认 foxglove_bridge 与导航栈一致 |
 
 ---
 

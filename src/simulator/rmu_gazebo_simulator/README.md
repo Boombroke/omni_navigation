@@ -1,155 +1,170 @@
 # rmu_gazebo_simulator
 
-## 1. Introduction
+Gazebo Harmonic (gz-sim8) 仿真环境，为 Sentry26 导航栈提供与实车**同链路**的仿真验证平台。
 
-rmu_gazebo_simulator 是基于 Gazebo (Ignition 字母版本) 的仿真环境，为 RoboMaster University 中的机器人算法开发提供仿真环境，方便测试 AI 算法，加快开发效率。
+---
 
-目前 rmu_gazebo_simulator 提供以下功能：
+## 1. 功能概述
 
-- rmuc_2025, rmuc_2026, rmul_2026 仿真世界模型
+- **仿真世界**：`rmuc_2025`、`rmuc_2026`、`rmul_2026` 三张比赛场地。
+- **GT 定位中继**：`chassis_odom_relay.py` 用 Gazebo 真值里程计替代实车 Point-LIO，提供精确 `odom→base_footprint` TF 及 `chassis_odometry`（供 MPPI 速度反馈），解决仿真 Point-LIO 漂移问题。
+- **仿真裁判发布器**：`sim_referee_publisher.py` 定时发布 `rm_interfaces` 裁判消息（`game_progress=4`），驱动 `sentry_behavior` 状态机在仿真中运行。
+- **导航链路验证**：已验证 MPPI Omni 在 rmuc_2026 世界可复现自主导航（GT 位移 ~2.4m，零 `Optimizer fail`）；`enable_behavior:=true` 时状态机闭环驱动机器人朝守点 (3.71,-0.61) 移动。
 
-- 网页端局域网联机对战
+---
 
-- 机器人底盘、云台、射击控制
+## 2. 环境要求
 
-| rmuc_2025 | rmul_2026 |
-|:-----------------:|:--------------:|
-|![rmuc_fly.gif](https://raw.githubusercontent.com/LihanChen2004/picx-images-hosting/master/rmuc_fly_image.1aoyoashvj.gif)|![spin_nav.gif](https://raw.githubusercontent.com/LihanChen2004/picx-images-hosting/master/spin_nav.1ove3nw63o.gif)|
+| 依赖 | 版本 |
+|------|------|
+| Ubuntu | 24.04 LTS |
+| ROS2 | Jazzy |
+| Gazebo | Harmonic (gz-sim8) |
+| ros_gz | jazzy 对应版本 |
 
-## 2. Quick Start
-
-### 2.1 Option 1: Docker
-
-#### 2.1.1 Setup Environment
-
-- [Docker](https://docs.docker.com/engine/install/)
-- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-- 允许本地的 Docker 容器访问主机的 X11 显示
-
-    ```bash
-    xhost +local:docker
-    ```
-
-#### 2.1.2 Create Container
+### 安装 Gazebo Harmonic + ros_gz
 
 ```bash
-docker run -it --rm --name rmu_gazebo_simulator \
-  --network host \
-  --runtime nvidia \
-  --gpus all \
-  -e NVIDIA_DRIVER_CAPABILITIES=all \
-  -e "DISPLAY=$DISPLAY" \
-  -v /tmp/.X11-unix:/tmp/.X11-unix \
-  -v /dev:/dev \
-  ghcr.io/smbu-polarbear-robotics-team/rmu_gazebo_simulator:1.0.0
+sudo apt install -y gz-harmonic
+sudo apt install -y \
+    ros-jazzy-ros-gz-bridge \
+    ros-jazzy-ros-gz-sim \
+    ros-jazzy-ros-gz-image \
+    ros-jazzy-ros-gz-interfaces
 ```
 
-### 2.2 Option 2: Build From Source
-
-#### 2.2.1 Setup Environment
-
-- Ubuntu 22.04
-- ROS: [Humble](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html)
-- Ignition: [Fortress](https://gazebosim.org/docs/fortress/install_ubuntu/)
-
-#### 2.2.2 Create Workspace
+或直接运行：
 
 ```bash
-sudo pip install vcstool2
-pip install xmacro
+bash src/scripts/setup_env.sh   # install_sim_deps 函数自动完成以上安装
 ```
+
+---
+
+## 3. 快速启动
+
+### 3.1 一键仿真（推荐）
+
+通过 `sentry_nav_bringup` 的顶层 launch 直接启动完整仿真栈（Gazebo + Nav2 + 可选状态机）：
 
 ```bash
-mkdir -p ~/ros_ws
-cd ~/ros_ws
+# 无头模式（不启动 Gazebo GUI，省显卡资源）
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true
+
+# 带 RViz 图形界面
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py world:=rmuc_2026
+
+# 开启状态机决策（守点自主导航闭环）
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true enable_behavior:=true
+
+# 多机器人仿真
+ros2 launch sentry_nav_bringup rm_multi_navigation_simulation_launch.py
 ```
+
+> **提示**：仿真 launch 自动启动 `chassis_odom_relay.py`（关闭 `odom_bridge`）并等待 `nav_delay`（默认 15s）后启动 Nav2，无需手动 unpause Gazebo。
+
+### 3.2 launch 参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `headless` | `false` | 无头模式（不启动 Gazebo GUI） |
+| `world` | `rmuc_2026` | 仿真世界（`rmuc_2025` / `rmuc_2026` / `rmul_2026`） |
+| `slam` | `True` | 启动 SLAM（`slam_toolbox`，为 static_layer 提供 `/map`） |
+| `nav_delay` | `15.0` | 物理稳定后延迟启动 Nav2 的秒数 |
+| `enable_behavior` | `false` | 同时启动 `sentry_behavior` 和 `sim_referee_publisher` |
+
+---
+
+## 4. 仿真定位中继（chassis_odom_relay.py）
+
+**位置**：`rmu_gazebo_simulator/scripts/nav/chassis_odom_relay.py`
+
+**解决的问题**：仿真 Point-LIO 位姿抖动 ~8mm/帧，`chassis_odometry` 静止时出现 ±0.1m/s 幽灵速度，导致 MPPI 反馈失真。GT 真值 (`chassis_odometry_gt`) 精确无噪声。
+
+**工作原理**：
+
+1. 订阅 `chassis_odometry_gt`（Gazebo `/gz/mux/model/red_standard_robot1/...` 桥接，1000Hz）。
+2. 以第一帧为 init，后续输出 `rel = init⁻¹ · gt`（spawn 相对位姿），消除绝对坐标偏置。
+3. 广播 `odom→base_footprint` TF（替代 `odom_bridge`）。
+4. 发布 `odometry`（`odom→gimbal_yaw` 系，供 `fake_vel_transform` 读姿态）。
+5. 发布 `chassis_odometry`（`odom` 系，`child=base_footprint`，twist 线速度在惯性轴，供 MPPI 速度反馈）。
+6. 透传 `cloud_registered` → `registered_scan` + `lidar_odometry`（`terrain_analysis`/`terrain_analysis_ext` 链路必需；无此透传则 slam 无 `/map` → `static_layer` 阻塞）。
+
+**与 odom_bridge 的关系**：
+
+- `navigation_simulation_launch.py` 传递 `enable_odom_bridge:=False` 关闭 `odom_bridge`，启动 `chassis_odom_relay.py`。
+- 实车 launch 默认 `enable_odom_bridge:=True`，行为完全不变。
+- 两路**不能同时运行**（会产生冲突的 `odom→base_footprint` TF 广播）。
+
+---
+
+## 5. 仿真裁判发布器（sim_referee_publisher.py）
+
+**位置**：`rmu_gazebo_simulator/scripts/nav/sim_referee_publisher.py`
+
+**功能**：定时（1Hz）发布以下 `rm_interfaces` 消息，使 `sentry_behavior` 状态机进入 `IN_MATCH` 并执行战术决策：
+
+| 话题 | 内容 |
+|------|------|
+| `referee/game_status` | `game_progress=4`，`stage_remain_time=420` |
+| `referee/robot_status` | `remain_hp=400`，`ammo_count=200` |
+| `referee/all_robot_hp` | 红方全员满血（500/500） |
+
+`rm_simulation_all_launch.py` 在 `enable_behavior:=true` 时同时启动此脚本和 `sentry_behavior_launch.py`。
+
+---
+
+## 6. 仿真世界说明
+
+| 世界名 | 说明 |
+|--------|------|
+| `rmuc_2025` | RMUC 2025 赛季标准场地 |
+| `rmuc_2026` | RMUC 2026 赛季标准场地（**默认，已验证导航**） |
+| `rmul_2026` | RMUL 2026 小场地 |
+
+世界文件位于 `rmu_gazebo_simulator/worlds/`。物理引擎：DART，地面使用解析平面（`<plane>`）+ `max_step_size=0.001` 防止圆柱轮-三角网接触发散。机器人 spawn 位置由 launch 文件指定，默认 z=0.05（减少冲击）。
+
+---
+
+## 7. 已知局限（诚实记录）
+
+| 局限 | 说明 |
+|------|------|
+| 地形避障不覆盖 | `IntensityVoxelLayer.min_obstacle_intensity: 100.0` 中和地形直标，仿真障碍仅来自静态地图 |
+| MPPI 从静止保守 | Gazebo MecanumDrive2 用 `AddWorldWrench`（非标准摩擦），MPPI 从 GT 静止反馈出发保守，近目标（2.5m）约 40s；远目标可能在 patience 内推进不完全 |
+| slam_toolbox bond 超时 | Gazebo `/clock` 初始为 0 导致 bond 超时，日志有告警，不阻塞导航 |
+| 启动竞态 | `enable_behavior:=true` 时行为节点可能在 `bt_navigator` 激活前发目标被拒绝；Nav2 激活后才稳定 |
+| 无实车传感器 | 无 Livox 真实驱动、无串口通信、不测试 Point-LIO 实际表现 |
+
+---
+
+## 8. 进程清理
+
+仿真进程较多，退出后如有残留可用以下命令清理：
 
 ```bash
-git clone https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator.git src/rmu_gazebo_simulator
+# Gazebo server
+pkill -9 ruby
+
+# 其余 ROS 节点（按 comm 名）
+pkill -9 component_conta
+pkill -9 sync_slam_toolb
+pkill -9 terrainAnalysis
+pkill -9 robot_state_pub
+pkill -9 parameter_bridg
+pkill -9 sentry_behavior
+
+# chassis_odom_relay 是 Python 节点，comm = python3，用 -f 模式
+pkill -9 -f 'chassis_odom_relay[.]py'
+pkill -9 -f 'sim_referee_pub[l]isher[.]py'
 ```
 
-```bash
-vcs import src < src/rmu_gazebo_simulator/dependencies.repos
-```
+> **不要用 `pkill -f <含字面串的模式>`**，会命中正在执行的 bash 命令行自身导致自杀。
 
-#### 2.2.3 Build
+---
 
-```sh
-rosdep install -r --from-paths src --ignore-src --rosdistro $ROS_DISTRO -y
-```
+## 维护者
 
-```sh
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=release
-```
+boombroke <2218681402@qq.com>
 
-### 2.3 Running
-
-启动仿真环境
-
-```sh
-ros2 launch rmu_gazebo_simulator bringup_sim.launch.py
-```
-
-> [!NOTE]
-> **注意：需要点击 Gazebo 左下角橙红色的 `启动` 按钮**
-
-#### 2.3.1 Test Commands
-
-控制机器人移动
-
-```sh
-ros2 run rmoss_gz_base test_chassis_cmd.py --ros-args -r __ns:=/red_standard_robot1/robot_base -p v:=0.3 -p w:=0.3
-#根据提示进行输入，支持平移与自旋
-```
-
-机器人云台
-
-```sh
-ros2 run rmoss_gz_base test_gimbal_cmd.py --ros-args -r __ns:=/red_standard_robot1/robot_base
-#根据提示进行输入，支持绝对角度控制
-```
-
-机器人射击
-
-```sh
-ros2 run rmoss_gz_base test_shoot_cmd.py --ros-args -r __ns:=/red_standard_robot1/robot_base
-#根据提示进行输入
-```
-
-#### 2.3.2 网页端控制
-
-支持局域网内联机操作，只需要将 localhost 改为主机 ip 即可。
-
-操作手端
-
-<http://localhost:5000/>
-
-```sh
-python3 src/rmu_gazebo_simulator/rmu_gazebo_simulator/scripts/player_web/main_no_vision.py
-```
-
-裁判系统端
-
-<http://localhost:2350/>
-
-```sh
-python3 src/rmu_gazebo_simulator/rmu_gazebo_simulator/scripts/referee_web/main.py
-```
-
-#### 2.3.3 切换仿真世界
-
-修改 [gz_world.yaml](./rmu_gazebo_simulator/config/gz_world.yaml) 中的 `world`。当前可选: `rmuc_2025`, `rmuc_2026`, `rmul_2026`
-
-## 配套导航仿真仓库
-
-- 2025 SMBU PolarBear Sentry Navigation
-
-    [sentry_nav](https://github.com/SMBU-PolarBear-Robotics-Team/sentry_nav.git)
-
-    ![cmu_nav_v1_0](https://raw.githubusercontent.com/LihanChen2004/picx-images-hosting/master/spin_nav.1ove3nw63o.gif)
-
-## 维护者及开源许可证
-
-Maintainer: Lihan Chen, <lihanchen2004@163.com>
-
-rmu_gazebo_simulator is provided under Apache License 2.0.
+本包基于 [SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator](https://github.com/SMBU-PolarBear-Robotics-Team/rmu_gazebo_simulator) 适配 Gazebo Harmonic + ROS2 Jazzy + Sentry26 导航架构。License: Apache-2.0

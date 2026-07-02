@@ -4,6 +4,9 @@
 
 配置文件位置：
 - 实车：`sentry_nav_bringup/config/reality/nav2_params.yaml`
+- 仿真：`sentry_nav_bringup/config/simulation/nav2_params.yaml`（`use_sim_time=true`，`IntensityVoxelLayer` 已中和，`global_costmap` 滚动窗口；**本文档调参均针对实车**，仿真配置有意与实车分离，改仿真参数不影响实车）
+
+> **文件隔离原则**：`config/reality/` 与 `config/simulation/` 完全独立，互不影响。改实车参数只动 `reality/`；改仿真参数只动 `simulation/`。`symlink-install` 模式下直接改源文件即时生效，无需 colcon build。
 
 ---
 

@@ -11,12 +11,13 @@
 - [2. 实车导航模式](#2-实车导航模式)
 - [3. SLAM 建图模式](#3-slam-建图模式)
 - [4. 状态机决策系统](#4-状态机决策系统)
-- [5. 辅助工具](#5-辅助工具)
-- [6. Nav2 导航参数详解](#6-nav2-导航参数详解)
-- [7. 定位模块参数详解](#7-定位模块参数详解)
-- [8. 地形分析参数详解](#8-地形分析参数详解)
-- [9. 串口通信参数](#9-串口通信参数)
-- [10. 常见调参场景](#10-常见调参场景)
+- [5. 仿真模式 (Gazebo Harmonic)](#5-仿真模式-gazebo-harmonic)
+- [6. 辅助工具](#6-辅助工具)
+- [7. Nav2 导航参数详解](#7-nav2-导航参数详解)
+- [8. 定位模块参数详解](#8-定位模块参数详解)
+- [9. 地形分析参数详解](#9-地形分析参数详解)
+- [10. 串口通信参数](#10-串口通信参数)
+- [11. 常见调参场景](#11-常见调参场景)
 
 ---
 
@@ -29,6 +30,7 @@
 | 实车导航 | `rm_navigation_reality_launch.py` | `slam:=False` | 物理机器人的自主导航 |
 | 实车建图 | `rm_navigation_reality_launch.py` | `slam:=True` | 物理机器人构建地图 |
 | 状态机决策 | `sentry_behavior_launch.py` | `strategy` | 比赛战术逻辑（独立启动） |
+| 仿真导航 | `rm_simulation_all_launch.py` | `headless:=true` | Gazebo Harmonic 仿真，同 MPPI 链路，无需硬件 |
 | 手柄遥控 | 内嵌于导航 launch | 默认开启 | PS4 手柄控制 |
 
 ### Launch 层级关系
@@ -44,6 +46,17 @@
   │   └── navigation_launch.py (始终启动)
   ├── joy_teleop_launch.py
   └── rviz_launch.py (可选)
+
+仿真模式:
+  rm_simulation_all_launch.py
+  ├── rmu_gazebo_simulator bringup_sim.launch.py (Gazebo Harmonic)
+  ├── robot_state_publisher_launch.py
+  ├── rm_navigation_simulation_launch.py
+  │   ├── bringup_launch.py [enable_odom_bridge:=False]
+  │   │   ├── slam_launch.py
+  │   │   └── navigation_launch.py
+  │   └── chassis_odom_relay.py (GT 定位中继，替代 Point-LIO+odom_bridge)
+  └── [enable_behavior=true] → sentry_behavior_launch.py + sim_referee_publisher.py
 
 状态机决策 (独立):
   sentry_behavior_launch.py
@@ -347,9 +360,72 @@ ros2 launch sentry_behavior sentry_behavior_launch.py target_tree:=b
 
 ---
 
-## 5. 辅助工具
+## 5. 仿真模式 (Gazebo Harmonic)
 
-### 5.1 手柄遥控
+仿真使用 **Gazebo Harmonic (gz-sim8)**，完整复用实车 MPPI Omni 控制链路（MPPI + fake_vel_transform + chassis_odometry 契约），无需 Livox 激光雷达或串口硬件。已验证：MPPI 在 rmuc_2026 世界自主导航，GT 位移 ~2.4m，零 `Optimizer fail`。
+
+### 5.1 仿真专有架构调整
+
+| 组件 | 实车行为 | 仿真行为 |
+|:---|:---|:---|
+| `odom_bridge` | 启动，处理 Point-LIO 输出 | **关闭**（`enable_odom_bridge:=False`） |
+| `chassis_odom_relay.py` | 不存在 | **启动**，订阅 `chassis_odometry_gt`（Gazebo GT 真值），广播 `odom→base_footprint` TF，发布 `odometry`/`chassis_odometry`/`registered_scan`/`lidar_odometry` |
+| `sim_referee_publisher.py` | 不存在 | **启动**（`enable_behavior=true` 时），定时发布 `game_progress=4` 等裁判消息驱动状态机 |
+| Nav2 参数文件 | `config/reality/nav2_params.yaml` | `config/simulation/nav2_params.yaml`（`use_sim_time=true`，point_lio `lidar_type=2`/`timestamp_unit=0`，`IntensityVoxelLayer.min_obstacle_intensity` 设为超过最大值以中和地形直标） |
+| 定位精度 | Point-LIO 激光惯性里程计 | Gazebo GT（精确无噪声，1000Hz） |
+
+### 5.2 启动命令
+
+```bash
+# 无头仿真（推荐，无需显示器）
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true
+
+# 带 RViz（需 GPU 驱动与显示环境）
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py world:=rmuc_2026
+
+# 开启状态机决策（守点自主导航闭环）
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true enable_behavior:=true
+
+# 多机器人仿真
+ros2 launch sentry_nav_bringup rm_multi_navigation_simulation_launch.py
+```
+
+### 5.3 完整参数列表
+
+| 参数 | 默认值 | 说明 |
+|:---|:---|:---|
+| `headless` | `false` | 无头模式（不启动 Gazebo GUI，省 GPU） |
+| `world` | `rmuc_2026` | 仿真世界（`rmuc_2025` / `rmuc_2026` / `rmul_2026`） |
+| `slam` | `True` | 是否启动 SLAM（slam_toolbox，为静态地图提供 `/map`） |
+| `nav_delay` | `15.0` | Gz 物理稳定后延迟启动 Nav2 的秒数 |
+| `enable_behavior` | `false` | 是否启动 sentry_behavior + sim_referee_publisher |
+
+### 5.4 仿真代价地图说明
+
+`config/simulation/nav2_params.yaml` 两个代价地图均设置：
+
+- `intensity_voxel_layer.min_obstacle_intensity: 100.0`（超过地形点最大 intensity 约 2.0，永不触发 terrain 直标）。
+- `intensity_voxel_layer.expected_update_rate: 0.0` + `observation_persistence: 0.0`（层保持 current，防 "Costmap timed out"）。
+- `global_costmap.rolling_window: true`（20×20m），`downsample_costmap: false`（解决滚动图与 SmacPlanner 降采样的不兼容坑）。
+- `static_layer` 保留（勿删！其动态库初始化是 `ObstacleLayer` 符号引入的前提，删除则 dlopen 崩溃）。
+
+**这意味着**：仿真中实时地形感知**不被测试**，障碍仅来自 slam 静态地图。实车地形避障（坡道、小障碍物）需在真实环境验证。
+
+### 5.5 已知局限与注意事项
+
+| 局限 | 说明 |
+|:---|:---|
+| 地形避障不覆盖 | `IntensityVoxelLayer` 被中和，不测试 `terrain_analysis` 的实时避障能力 |
+| MPPI 从静止保守 | cmd_vel 间歇（0.09↔0），近目标（2.5m）约 40s 到达；远目标可能在窗口内只推进部分 |
+| slam_toolbox bond 超时 | 预期现象，不阻塞导航；`chassis_odom_relay` 已透传 `cloud_registered` 使 slam 有数据 |
+| 启动竞态 | `enable_behavior:=true` 时行为节点可能在 `bt_navigator` 激活前发目标被拒绝；Nav2 激活后才稳定生效 |
+| 不测试串口/点云 | 仿真无 Livox 真实驱动、无 rm_serial_driver，不覆盖串口通信链路 |
+
+---
+
+## 6. 辅助工具
+
+### 6.1 手柄遥控
 
 导航 launch 文件默认内嵌启动手柄控制节点。也可独立启动：
 
@@ -359,7 +435,7 @@ ros2 launch sentry_nav_bringup joy_teleop_launch.py
 
 PS4 手柄键位映射在 `nav2_params.yaml` 的 `teleop_twist_joy_node:` 段配置。
 
-### 5.2 地图坐标拾取工具
+### 6.2 地图坐标拾取工具
 
 使用 matplotlib 可视化地图并交互式拾取坐标（用于设定行为树中的目标点）：
 
@@ -367,7 +443,7 @@ PS4 手柄键位映射在 `nav2_params.yaml` 的 `teleop_twist_joy_node:` 段配
 ros2 launch location map_visualizer_launch.py
 ```
 
-### 5.3 独立模块启动
+### 6.3 独立模块启动
 
 以下模块可独立启动，用于调试或单元测试：
 
@@ -384,12 +460,13 @@ ros2 launch location map_visualizer_launch.py
 
 ---
 
-## 6. Nav2 导航参数详解
+## 7. Nav2 导航参数详解
 
 参数文件位于：
 - 实车：`sentry_nav_bringup/config/reality/nav2_params.yaml`
+- 仿真：`sentry_nav_bringup/config/simulation/nav2_params.yaml`（`use_sim_time=true`，`IntensityVoxelLayer` 已中和，详见[第 5 节](#5-仿真模式-gazebo-harmonic)）
 
-### 6.1 全局规划器
+### 7.1 全局规划器
 
 **系统使用 `nav2_smac_planner::SmacPlanner2D`**。全向底盘无最小转弯半径约束，SmacPlanner2D（2D A*）在此场景下路径更简洁，计算开销低于 Hybrid A*。
 
@@ -402,7 +479,7 @@ ros2 launch location map_visualizer_launch.py
 | `downsample_costmap` | `false` | 是否对代价地图进行下采样 |
 | `max_iterations` | `1000000` | 最大搜索迭代次数，-1 禁用 |
 
-### 6.2 局部控制器 - nav2_mppi_controller::MPPIController
+### 7.2 局部控制器 - nav2_mppi_controller::MPPIController
 
 实车使用 Nav2 官方 MPPI 控制器，全向 Omni 运动模型，`odom_topic` 指向 `chassis_odometry`（底盘系扭矩，与云台朝向解耦）。详细参数见 `sentry_nav_bringup/config/reality/nav2_params.yaml` 的 `controller_server:` 段。
 
@@ -412,7 +489,7 @@ ros2 launch location map_visualizer_launch.py
 | `odom_topic` | `chassis_odometry` | 里程计输入（底盘系，不受云台旋转影响） |
 | `target_frame` | `gimbal_yaw_fake` | 控制器参考坐标系（虚拟惯性系） |
 
-### 6.3 代价地图 (Costmap2D)
+### 7.3 代价地图 (Costmap2D)
 
 #### 局部代价地图 (Local Costmap)
 
@@ -437,7 +514,7 @@ ros2 launch location map_visualizer_launch.py
 - 覆盖整个场地（非滚动窗口）
 - IntensityVoxelLayer 订阅 `terrain_map_ext` 话题（更大感知范围）
 
-### 6.4 速度平滑器 (Velocity Smoother)
+### 7.4 速度平滑器 (Velocity Smoother)
 
 | 参数 | 值 | 说明 |
 |:---|:---|:---|
@@ -448,7 +525,7 @@ ros2 launch location map_visualizer_launch.py
 | `max_decel` | `[-3.0, -3.0, -5.0]` | 最大减速度 |
 | `feedback` | `OPEN_LOOP` | 反馈模式。`OPEN_LOOP` 不依赖里程计反馈 |
 
-### 6.5 恢复行为插件
+### 7.5 恢复行为插件
 
 | 插件名 | 说明 |
 |:---|:---|
@@ -458,7 +535,7 @@ ros2 launch location map_visualizer_launch.py
 | `Wait` | 原地等待指定时间 |
 | `AssistedTeleop` | 辅助遥控模式 |
 
-### 6.6 Nav2 导航行为树
+### 7.6 Nav2 导航行为树
 
 | 文件 | 用途 |
 |:---|:---|
@@ -467,9 +544,9 @@ ros2 launch location map_visualizer_launch.py
 
 ---
 
-## 7. 定位模块参数详解
+## 8. 定位模块参数详解
 
-### 7.1 Point-LIO 里程计
+### 8.1 Point-LIO 里程计
 
 | 参数 | 值 | 说明 |
 |:---|:---|:---|
@@ -492,7 +569,7 @@ ros2 launch location map_visualizer_launch.py
 
 > **调参警告**：`gravity` 向量必须精确匹配 LiDAR 的物理安装角度。错误的重力向量会导致里程计快速发散。
 
-### 7.2 Small GICP 重定位
+### 8.2 Small GICP 重定位
 
 | 参数 | 值 | 说明 |
 |:---|:---|:---|
@@ -521,7 +598,7 @@ ros2 launch location map_visualizer_launch.py
 
 > **调参提示**：修改这些参数时以 `config/reality/` 配置为准。
 
-### 7.3 Livox MID360 驱动参数
+### 8.3 Livox MID360 驱动参数
 
 | 参数 | 默认值 | 说明 |
 |:---|:---|:---|
@@ -532,9 +609,9 @@ ros2 launch location map_visualizer_launch.py
 
 ---
 
-## 8. 地形分析参数详解
+## 9. 地形分析参数详解
 
-### 8.1 Terrain Analysis (局部地形)
+### 9.1 Terrain Analysis (局部地形)
 
 订阅 `sensor_scan` + `odometry`，发布 `terrain_map` → 供**局部代价地图** IntensityVoxelLayer 使用。
 
@@ -556,7 +633,7 @@ ros2 launch location map_visualizer_launch.py
 | `minBlockPointNum` | `10` | 每个体素块最少点数 |
 | `noDataObstacle` | `false` | 无数据区域视为障碍物 |
 
-### 8.2 Terrain Analysis Ext (全局地形)
+### 9.2 Terrain Analysis Ext (全局地形)
 
 订阅 `terrain_map`，发布 `terrain_map_ext` → 供**全局代价地图** IntensityVoxelLayer 使用。
 
@@ -572,7 +649,7 @@ ros2 launch location map_visualizer_launch.py
 
 ---
 
-## 9. 串口通信参数
+## 10. 串口通信参数
 
 ### 配置文件
 
@@ -622,7 +699,7 @@ ros2 launch location map_visualizer_launch.py
 
 ---
 
-## 10. 常见调参场景
+## 11. 常见调参场景
 
 ### 场景 1: 机器人频繁撞墙
 

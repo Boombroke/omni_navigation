@@ -124,18 +124,97 @@ ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py \
 
 > 实车 launch 的 `world` 默认值是 `204`（数字，对应实验室地图命名），需根据实际地图文件名覆盖。
 
-## 5. 状态机决策（独立启动）
+## 5. 仿真模式 (Gazebo Harmonic)
+
+仿真使用 **Gazebo Harmonic (gz-sim8)**，通过 `ros_gz_bridge` 桥接 ROS2 话题。仿真与实车运行**相同的 MPPI Omni 控制链路**（MPPI + fake_vel_transform + chassis_odometry 契约），无需激光雷达或串口硬件。
+
+### 5.0 仿真依赖
+
+```bash
+# Gazebo Harmonic（如未随 ROS2 Jazzy 自动安装）
+sudo apt install -y gz-harmonic
+
+# ros_gz 桥接包（Jazzy 对应版本）
+sudo apt install -y \
+    ros-jazzy-ros-gz-bridge \
+    ros-jazzy-ros-gz-sim \
+    ros-jazzy-ros-gz-image \
+    ros-jazzy-ros-gz-interfaces
+```
+
+`setup_env.sh` 中的 `install_sim_deps` 函数会自动安装以上依赖（见 `src/scripts/setup_env.sh`）。
+
+### 5.1 一键启动仿真
+
+```bash
+# 无头模式（无需显示器/GPU，推荐调试与 CI）
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true
+
+# 带 RViz 图形界面（需显卡驱动与 X11）
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py world:=rmuc_2026
+
+# 开启状态机决策（守点自主导航闭环）
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true enable_behavior:=true
+```
+
+仿真 launch 参数：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `headless` | `false` | 无头模式（不启动 Gazebo GUI） |
+| `world` | `rmuc_2026` | 仿真世界（`rmuc_2025` / `rmuc_2026` / `rmul_2026`） |
+| `slam` | `True` | SLAM 建图（仿真用 slam_toolbox 提供静态地图） |
+| `nav_delay` | `15.0` | Gz 物理稳定后再启动 Nav2 的延迟秒数 |
+| `enable_behavior` | `false` | 是否启动 sentry_behavior 状态机决策 |
+
+### 5.2 仿真定位机制
+
+仿真中 **Point-LIO 被旁路**，由 `chassis_odom_relay.py`（`rmu_gazebo_simulator` 包）替代：
+
+- 订阅 Gazebo 真值里程计 `chassis_odometry_gt`（精确 1000Hz，无噪声）。
+- 以首帧为原点输出 spawn 相对位姿，广播 `odom→base_footprint` TF。
+- 复刻 `odom_bridge` 契约，发布 `odometry`、`chassis_odometry`（供 MPPI 速度反馈）、`registered_scan`、`lidar_odometry`（供 terrain 链路）。
+- `navigation_simulation_launch.py` 通过 `enable_odom_bridge:=False` 关闭 `odom_bridge`，仅启动 `chassis_odom_relay.py`。实车 launch 默认 `enable_odom_bridge:=True`，行为不变。
+
+`sim_referee_publisher.py` 定时发布 `game_progress=4` 等裁判消息，驱动 `sentry_behavior` 在仿真中运行战术逻辑。
+
+### 5.3 验证仿真导航
+
+启动后向 `/goal_pose` 发一个目标，观察机器人实际移动：
+
+```bash
+# 等 Nav2 完全激活（约 20~30s）后发目标
+ros2 topic pub --once /goal_pose geometry_msgs/msg/PoseStamped \
+  '{header: {frame_id: "map"}, pose: {position: {x: 2.5, y: 0.0, z: 0.0}, orientation: {w: 1.0}}}'
+
+# 读 Gazebo 真值位姿（确认机器人实际移动）
+gz model -m red_standard_robot1 -p
+```
+
+预期：机器人从初始位置出发，GT 位移应 > 2m，路径平滑，无 `Optimizer fail`。
+
+### 5.4 仿真已知局限（请诚实对待）
+
+| 局限 | 说明 |
+|------|------|
+| 地形避障不覆盖 | `IntensityVoxelLayer` 的 `min_obstacle_intensity` 设为远超最大值（永不触发），仿真依赖静态地图作为唯一障碍源；实车地形感知不会在仿真中被测试 |
+| MPPI 从静止保守 | cmd_vel 间歇（0.09↔0），到近目标（2.5m）约 40s；较远目标（4m+）在观测窗内可能只推进部分 |
+| slam_toolbox bond 超时 | 日志中出现但不阻塞导航，静态地图已由 relay 透传 `/map` 兜底 |
+| 启动竞态 | `enable_behavior:=true` 时，若 `bt_navigator` 尚未激活就收到 `/goal_pose` 会被拒绝；Nav2 完全激活后行为节点才稳定驱动 |
+| 无实时传感器 | 仿真无 Livox 真实点云；LiDAR 数据来自 Gazebo 的 velodyne 仿真，Point-LIO 被旁路 |
+
+## 6. 状态机决策（独立启动）
 ```bash
 ros2 launch sentry_behavior sentry_behavior_launch.py
 ```
 
-或在实车 launch 时通过 `enable_behavior:=True` 自动延迟 8 秒启动（见 5.0 节）。
+或在实车 launch 时通过 `enable_behavior:=True` 自动延迟 8 秒启动（见 4.0 节）。
 
-## 6. 比赛录制与回放
+## 7. 比赛录制与回放
 
 `sentry_match_recorder` 在比赛进入 `game_progress=4` 上升沿自动启动 `ros2 bag record`，下降沿自动停止，单场所有切片归到一个目录。`rm_sentry_launch.py` 默认带录包，临时关用 `enable_recorder:=False`。
 
-### 6.1 自动录制
+### 7.1 自动录制
 
 ```bash
 # 默认带录包，比赛开始即自动录到 logs/match-bags/sortie_<TS>/
@@ -154,13 +233,13 @@ logs/match-bags/
     └── ...
 ```
 
-### 6.2 整场连续回放
+### 7.2 整场连续回放
 
 ```bash
 ros2 bag play logs/match-bags/sortie_20260521_143012
 ```
 
-### 6.3 切片合并到单文件
+### 7.3 切片合并到单文件
 
 ```bash
 ros2 run sentry_match_recorder merge_sortie logs/match-bags/sortie_20260521_143012
@@ -172,7 +251,7 @@ ros2 run sentry_match_recorder merge_sortie <SORTIE_DIR> --remove-shards
 ros2 run sentry_match_recorder merge_sortie <SORTIE_DIR> --dry-run
 ```
 
-## 7. 常见问题
+## 8. 常见问题
 
 | 现象 | 解决 |
 |------|------|
@@ -180,3 +259,5 @@ ros2 run sentry_match_recorder merge_sortie <SORTIE_DIR> --dry-run
 | 编译 OOM | 加 `--parallel-workers 4` 或 `--executor sequential` |
 | 先验点云缺失 | PCD 文件体积较大未入仓，需自行准备并放置到正确路径 |
 | 重定位后位置异常 | 确认先验 PCD 与 2D 地图使用相同坐标原点（同一次建图产生）|
+| 仿真机器人不动 | 检查 Nav2 是否完全激活（等 nav_delay 时间后才启动），确认无 `Start occupied` 日志 |
+| 仿真 slam_toolbox bond 超时 | 预期行为，不影响导航；静态地图已由 chassis_odom_relay 兜底 |

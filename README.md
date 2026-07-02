@@ -4,7 +4,7 @@
 
 # Sentry26 — RoboMaster 哨兵机器人 ROS2 自主导航系统
 
-RoboMaster 2026 赛季哨兵机器人 ROS2 自主导航系统。**全向 (Mecanum) 底盘 + 独立云台 + 持续自旋**,基于 ROS2 Jazzy + Nav2 + 自研分层状态机决策 + Livox Mid360,纯实车运行。
+RoboMaster 2026 赛季哨兵机器人 ROS2 自主导航系统。**全向 (Mecanum) 底盘 + 独立云台 + 持续自旋**,基于 ROS2 Jazzy + Nav2 + 自研分层状态机决策 + Livox Mid360。支持实车部署与 Gazebo Harmonic 仿真。
 
 - **Maintainer**: boombroke <2218681402@qq.com>
 - **基于**: [pb2025_sentry_nav](https://github.com/SMBU-PolarBear-Robotics-Team/pb2025_sentry_nav)(Lihan Chen 等)二次开发并适配 RM2026 赛季
@@ -103,12 +103,18 @@ src/
 ├── sentry_tools/                        # 串口 Mock / 地图坐标拾取 / 数据可视化(独立脚本, 非 ROS 包)
 ├── serial/serial_driver/                # rm_serial_driver(v3.0 多包协议)
 ├── rm_interfaces/                       # 自定义消息(裁判系统 / 视觉)
+├── simulator/                           # 仿真相关包
+│   ├── rmu_gazebo_simulator/            #   Gazebo Harmonic 世界模型 + GT 定位中继 + 仿真裁判发布器
+│   ├── rmoss_gazebo/                    #   [第三方] rmoss gz_base/bridge/cam/plugins
+│   ├── rmoss_interfaces/                #   [第三方] rmoss 仿真接口消息
+│   ├── ign_sim_pointcloud_tool/         #   [第三方] Gazebo 点云桥接工具
+│   └── rmoss_gz_resources/             #   [第三方] 机器人 SDF 模型资源 (URDF/TF 生成需要)
 ├── scripts/                             # 环境配置与修复脚本
 └── docs/                                # 项目级文档
 tests/                                   # INV-1~7 状态机回归脚本(注入裁判数据 + 抓 /goal_pose 坐标)
 ```
 
-> 全量包清单:`find src -name package.xml | xargs grep '<name>'`(当前 19 个 ROS 包)。
+> 全量包清单:`find src -name package.xml | xargs grep '<name>'`(19 个实车包 + 7 个仿真包,共 26 个 ROS 包)。
 
 ## 环境要求
 
@@ -118,7 +124,7 @@ tests/                                   # INV-1~7 状态机回归脚本(注入�
 | ROS2 | Jazzy |
 | C++ | C++17 |
 | Python | 3.12+ |
-| 硬件 | Livox Mid360 + 麦轮全向底盘 + IMU |
+| 硬件 | Livox Mid360 + 麦轮全向底盘 + IMU（仿真模式无需硬件）|
 
 ## 编译
 
@@ -153,6 +159,25 @@ ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py slam:=False world
 
 > 实车多进程编排见 `src/scripts/run_all.sh`(串口 + 导航 + 决策 + 串口抓包,`Ctrl+C` 统一停)。
 
+### 仿真模式 (Gazebo Harmonic)
+
+仿真与实车运行**相同的 MPPI Omni 控制链路**。`odom_bridge` 在仿真中被 Gazebo 真值定位中继（`chassis_odom_relay.py`）替代,无需激光雷达硬件。`sim_referee_publisher.py` 向状态机提供裁判数据。
+
+```bash
+# 无头仿真（推荐 CI/调试）
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true
+
+# 带 RViz 图形界面
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py world:=rmuc_2026
+
+# 开启状态机决策（守点自主导航）
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true enable_behavior:=true
+```
+
+> **仿真已验证**：MPPI Omni 链路在 rmuc_2026 世界中可复现自主导航（GT 位移 ~2.4m，零 `Optimizer fail`）；状态机闭环驱动机器人朝守点 (3.71,-0.61) 移动。
+> **已知仿真局限（诚实记录）**：(a) `IntensityVoxelLayer` 已中和（`min_obstacle_intensity` 设远超最大值），仿真依赖静态地图障碍而非实时地形，**不覆盖实车地形避障**；(b) MPPI 从静止保守，远目标需较长收敛；(c) `slam_toolbox` bond 超时但不阻塞（静态图兜底）；(d) `enable_behavior` 存在启动竞态，需 Nav2 完全激活后才生效。
+> 详见 [仿真说明](src/simulator/rmu_gazebo_simulator/README.md)。
+
 ## 主要参数(摘要)
 
 | 参数 | 说明 | 默认值 |
@@ -162,8 +187,10 @@ ros2 launch sentry_nav_bringup rm_navigation_reality_launch.py slam:=False world
 | `namespace` | 机器人命名空间 | `""` (空) |
 | `use_rviz` | 启动 RViz | `True` |
 | `enable_recorder` | 比赛自动录包(实车 launch) | `True` |
-| `enable_behavior` | 启动 sentry_behavior 决策(实车 launch) | `False` |
-| `strategy` | 状态机策略名(实车 launch) | `rmuc_defend`(可选 `a` / `b`) |
+| `enable_behavior` | 启动 sentry_behavior 决策(实车/仿真 launch) | `False` |
+| `strategy` | 状态机策略名(实车/仿真 launch) | `rmuc_defend`(可选 `a` / `b`) |
+| `headless` | 无头模式(仿真 launch) | `false` |
+| `nav_delay` | 延迟启动 Nav2 的秒数(仿真 launch) | `15.0` |
 
 > 完整参数与默认值以各 launch 的 `DeclareLaunchArgument` 为准,详见 [sentry_nav_bringup README](src/sentry_nav_bringup/README.md)。
 
@@ -197,13 +224,14 @@ python3 src/sentry_tools/serial_visualizer.py
 
 | 文档 | 说明 |
 |------|------|
-| [快速部署指南](src/docs/QUICKSTART.md) | 从零环境搭建与首次运行 |
-| [系统架构详解](src/docs/ARCHITECTURE.md) | 各模块数据流、坐标系、接口设计 |
-| [运行模式说明](src/docs/RUNNING_MODES.md) | 实车建图 / 导航 / 状态机决策模式 |
+| [快速部署指南](src/docs/QUICKSTART.md) | 从零环境搭建与首次运行(含仿真) |
+| [系统架构详解](src/docs/ARCHITECTURE.md) | 各模块数据流、坐标系、接口设计(含仿真架构) |
+| [运行模式说明](src/docs/RUNNING_MODES.md) | 实车建图 / 导航 / 状态机决策 / 仿真模式 |
 | [参数调优指南](src/docs/TUNING_GUIDE.md) | Point-LIO / Nav2 调优 |
 | [远程调试指南](src/docs/REMOTE_DEBUG.md) | Foxglove 远程可视化 |
 | [状态机决策包说明](src/sentry_behavior/README.md) | strategies + 状态可视化协议 |
-| [Nav2 启动包说明](src/sentry_nav_bringup/README.md) | launch / nav2_params 结构 |
+| [Nav2 启动包说明](src/sentry_nav_bringup/README.md) | launch / nav2_params 结构(含仿真 launch) |
+| [仿真包说明](src/simulator/rmu_gazebo_simulator/README.md) | Gazebo Harmonic 仿真环境与定位中继 |
 
 ## 致谢
 

@@ -4,6 +4,10 @@
 # 终端输出加 [serial] / [nav] / [behavior] / [capture] 前缀便于区分来源.
 # Ctrl+C 一并停止 (先 SIGINT 让 ros2 launch 走 lifecycle, 4s 内兜底 SIGKILL).
 #
+# 本脚本用于【实车模式】。仿真模式（Gazebo Harmonic）请直接运行：
+#   ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true
+#   ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true enable_behavior:=true
+#
 # 用法:
 #   bash src/scripts/run_all.sh                                          # 默认: 实车 nav (world=rmuc_2026) + strategy=rmuc_defend + 10Hz capture
 #   WORLD=rmul_2026 bash src/scripts/run_all.sh                          # 换场地; 命令行 world:= 优先级更高

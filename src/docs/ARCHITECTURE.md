@@ -349,3 +349,68 @@ map (全局地图坐标系，由 small_gicp 修正)
     - 接收底盘编码器反馈的里程计数据。
     - 接收 IMU 原始数据 (加速度、角速度)。
     - 接收裁判系统透传的原始字节流，并由 `rm_serial_driver` 解析为 ROS2 消息发布到 `referee/*` 话题。
+
+---
+
+## 第7章: 仿真架构 (Gazebo Harmonic)
+
+### 7.1 仿真概述
+
+仿真使用 **Gazebo Harmonic (gz-sim8)**，通过 `ros_gz_bridge` 桥接 ROS2 话题，世界模型由 `rmu_gazebo_simulator` 提供（`rmuc_2025` / `rmuc_2026` / `rmul_2026`）。仿真完整复用实车 MPPI Omni 控制链路，控制链路不作任何修改。
+
+**已验证（GT，非捏造）**：
+- `rm_simulation_all_launch.py headless:=true` 无头起仿真后，向 map 系发目标 (2.5, 0)，机器人 GT 位移 **2.4~2.5m**，零 `Optimizer fail` / `Start occupied` / `Goal timeout`，可复现。
+- `enable_behavior:=true` 时，`sentry_behavior`（`rmuc_defend` 策略）向 `/goal_pose` 发守点 (3.71,-0.61)，机器人自主移动 ~1.57m 朝守点（startup race 解决后完整到达）。
+
+### 7.2 仿真定位替代链路（chassis_odom_relay）
+
+实车使用 Point-LIO + odom_bridge 提供定位。仿真中 Point-LIO 里程计质量退化（位姿漂移、幽灵速度），因此将其旁路：
+
+```
+[Gazebo GT 真值 chassis_odometry_gt (1000Hz, 精确)]
+        ↓
+chassis_odom_relay.py (rmu_gazebo_simulator/scripts/nav/)
+        ├── 以首帧为原点，输出 spawn 相对位姿
+        ├── 广播 odom→base_footprint TF
+        ├── 发布 odometry（odom→gimbal_yaw，供 fake_vel_transform）
+        ├── 发布 chassis_odometry（odom 系，child=base_footprint，供 MPPI 速度反馈）
+        ├── 透传 cloud_registered → registered_scan / lidar_odometry（供 terrain_analysis）
+        └── 不发布 sensor_scan（terrain_analysis 需此话题，由 odom_bridge 原本负责）
+```
+
+`navigation_simulation_launch.py` 通过 `enable_odom_bridge:=False`（默认 `True` 保持实车行为不变）关闭 `odom_bridge`，再启动 `chassis_odom_relay.py`。
+
+### 7.3 仿真裁判模拟（sim_referee_publisher）
+
+`sim_referee_publisher.py`（`rmu_gazebo_simulator/scripts/nav/`）定时发布以下 `rm_interfaces` 消息，使 `sentry_behavior` 状态机在仿真中正常运行：
+
+| 话题 | 内容 |
+|---|---|
+| `referee/game_status` | `game_progress=4`，`stage_remain_time=420`（比赛中） |
+| `referee/robot_status` | `remain_hp=400`，`ammo_count=200`（满血满弹） |
+| `referee/all_robot_hp` | 全场血量正常 |
+
+`rm_simulation_all_launch.py` 通过 `enable_behavior` 参数门控：`enable_behavior:=true` 时同时启动 `sentry_behavior_launch.py` 与 `sim_referee_publisher`。
+
+### 7.4 仿真代价地图差异
+
+实车与仿真的 `IntensityVoxelLayer` 关键差异：
+
+| 参数 | 实车 (`config/reality/`) | 仿真 (`config/simulation/`) |
+|---|---|---|
+| `min_obstacle_intensity` | `0.2`（检测 20cm+ 障碍物） | `100.0`（超过点云最大强度 ~2.0，**永不触发**） |
+| `expected_update_rate` | `5.0` | `0.0`（层始终 current，防超时） |
+| `observation_persistence` | `0.2` | `0.0` |
+| `global_costmap.rolling_window` | `false` | `true`（20×20m，解决 slam 稀疏图 "outside bounds"） |
+| `global_costmap.downsample_costmap` | `true` | `false`（滚动图与降采样不兼容） |
+
+> **注意**：`static_layer` 在仿真代价地图中**必须保留**。`IntensityVoxelLayer`（`liblayers.so`）依赖 `static_layer` 动态加载时把 `nav2_costmap_2d::ObstacleLayer` typeinfo 引入全局符号表；删除 `static_layer` 会导致 dlopen 崩溃（`undefined symbol _ZTIN15nav2_costmap_2d13ObstacleLayerE`）。
+
+### 7.5 已知仿真局限（诚实记录）
+
+| 局限 | 根因 | 说明 |
+|---|---|---|
+| 地形实时障碍物检测不被测试 | `min_obstacle_intensity: 100.0` 中和 IntensityVoxelLayer | 仿真障碍仅来自静态 slam 地图；实车实时地形避障能力需在真实环境测试 |
+| MPPI 从静止保守（间歇发速） | Gazebo MecanumDrive2 用 `AddWorldWrench`（非轮摩擦），GT 反馈精确=0 → MPPI "bootstrap 保守" | 近目标（2.5m）约 40s 到达；较远目标在 patience 窗口内可能只推进部分；物理自旋关闭 |
+| slam_toolbox bond 超时 | Gazebo `/clock` 初始为 0，bond 超时机制误触发 | 不阻塞导航；静态地图由 relay 透传的 `registered_scan` 建图兜底 |
+| 启动竞态 | `sentry_behavior` 在 `bt_navigator` 激活前发目标被拒绝，dedup 不重发 | 行为节点需在 Nav2 完全激活后（约 nav_delay + 10s）才稳定驱动 |

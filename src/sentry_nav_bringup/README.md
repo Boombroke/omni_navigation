@@ -8,8 +8,8 @@
 
 `sentry_nav_bringup` 承担以下职责：
 
-- 提供实车 **launch 入口**
-- 存放 `config/reality/` **Nav2 参数**
+- 提供实车与仿真 **launch 入口**
+- 存放 `config/reality/`（实车）和 `config/simulation/`（仿真）**Nav2 参数**
 - 存放地图（`map/`）、先验点云（`pcd/`）、RViz 布局（`rviz/`）
 - 存放 `bt_navigator` 使用的 **Nav2 内置 BT XML**（与 `sentry_behavior` 状态机决策不同）
 
@@ -62,10 +62,13 @@ fake_vel_transform    订阅 cmd_vel_nav2_result (input_cmd_vel_topic)
 |---|---|---|
 | `rm_navigation_reality_launch.py` | **实车主入口**（不含串口驱动） | 见下表 |
 | `rm_sentry_launch.py` | **实车一键**（导航 + 串口 + 录包 + 可选状态机决策） | 见下表 |
+| `rm_simulation_all_launch.py` | **仿真一键**（Gazebo Harmonic + Nav2 + 可选状态机决策） | 见下表 |
+| `rm_navigation_simulation_launch.py` | 仿真导航内层（由 sim_all 调用，含 chassis_odom_relay） | `enable_odom_bridge`(`True`) |
+| `rm_multi_navigation_simulation_launch.py` | 多机器人仿真导航 | namespace 多实例 |
 | `bringup_launch.py` | 内部聚合，被以上入口 include | `slam`, `map`, `prior_pcd_file`, `scan_context_db_file`, `use_composition`(`True`), `log_level`(`info`) |
 | `slam_launch.py` | SLAM 模式（point_lio + slam_toolbox + pointcloud_to_laserscan） | `namespace`, `params_file`, `use_sim_time`, `autostart`, `use_respawn`, `log_level` |
 | `localization_launch.py` | 定位模式（point_lio + map_server + small_gicp_relocalization） | `namespace`, `map`, `prior_pcd_file`, `scan_context_db_file`, `use_composition`(`False`), `container_name`(`nav2_container`) |
-| `navigation_launch.py` | Nav2 lifecycle 节点群 + terrain + odom_bridge + fake_vel_transform | `namespace`, `params_file`, `use_composition`(`False`), `container_name`(`nav2_container`) |
+| `navigation_launch.py` | Nav2 lifecycle 节点群 + terrain + odom_bridge + fake_vel_transform | `namespace`, `params_file`, `use_composition`(`False`), `container_name`(`nav2_container`), `enable_odom_bridge`(`True`) |
 | `robot_state_publisher_launch.py` | URDF + TF（仅在导航模块独立运行时使用） | `namespace`, `use_sim_time`, `robot_name`(`sentry_robot`) |
 | `rviz_launch.py` | RViz2 可视化（退出 RViz 触发整体 Shutdown） | `namespace`, `rviz_config`(`rviz/nav2_default_view.rviz`) |
 
@@ -101,6 +104,18 @@ fake_vel_transform    订阅 cmd_vel_nav2_result (input_cmd_vel_topic)
 | `enable_behavior` | `False` | 启动 sentry_behavior 战术决策（延迟 8s） |
 | `strategy` | `rmuc_defend` | 传给 sentry_behavior_node 的状态机策略名（rmuc_defend / a / b） |
 
+### rm_simulation_all_launch.py 参数表
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `headless` | `false` | 无头模式（不启动 Gazebo GUI） |
+| `world` | `rmuc_2026` | 仿真世界（`rmuc_2025` / `rmuc_2026` / `rmul_2026`） |
+| `slam` | `True` | 启动 SLAM（slam_toolbox，为 static_layer 提供 `/map`） |
+| `nav_delay` | `15.0` | 物理稳定后延迟启动 Nav2 的秒数 |
+| `enable_behavior` | `false` | 启动 sentry_behavior + sim_referee_publisher |
+
+> **仿真定位**：仿真 launch 通过 `enable_odom_bridge:=False` 关闭 `odom_bridge`，改由 `chassis_odom_relay.py` 从 Gazebo 真值里程计（`chassis_odometry_gt`）广播 `odom→base_footprint` TF 并发布 `chassis_odometry`（供 MPPI）。实车路径完全不受影响。
+
 ---
 
 ## 启动方式
@@ -129,15 +144,33 @@ ros2 launch sentry_nav_bringup rm_sentry_launch.py \
   world:=rmul_2026 enable_behavior:=True strategy:=rmuc_defend
 ```
 
+### 仿真（Gazebo Harmonic）
+
+```bash
+# 无头仿真（推荐调试与 CI）
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true
+
+# 带 RViz
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py world:=rmuc_2026
+
+# 开启状态机决策
+ros2 launch sentry_nav_bringup rm_simulation_all_launch.py headless:=true enable_behavior:=true
+```
+
+> 仿真局限与注意事项详见 [rmu_gazebo_simulator README](../simulator/rmu_gazebo_simulator/README.md)。
+
 ---
 
 ## 配置目录结构
 
 ```
 config/
-└── reality/
-    ├── nav2_params.yaml           实车 Nav2 参数 (use_sim_time=false, controller_frequency=30Hz)
-    └── mid360_user_config.json    Livox Mid360 驱动网络配置
+├── reality/
+│   ├── nav2_params.yaml           实车 Nav2 参数 (use_sim_time=false, controller_frequency=30Hz)
+│   └── mid360_user_config.json    Livox Mid360 驱动网络配置
+└── simulation/
+    └── nav2_params.yaml           仿真 Nav2 参数 (use_sim_time=true, IntensityVoxelLayer 已中和,
+                                   global_costmap rolling_window, downsample_costmap:false)
 
 map/                               2D 地图（用户建图后手动存放）
 │   # 建议命名：map/reality/<world>.yaml
@@ -217,6 +250,7 @@ bringup_launch.py
 - `enable_periodic_relocalization: true` 必须开启，否则 small_gicp 不持续周期纠偏
 - PCD 先验地图与 2D 地图**必须在同一坐标系、同一起点**建图，不可混用不同 session 的产物
 - 实车入口（含 `rm_sentry_launch.py`）`world` 默认 `204`，需根据实际地图文件名覆盖
+- `config/reality/` 与 `config/simulation/` 完全隔离：实车 launch 只读 `reality/`，仿真 launch 只读 `simulation/`
 
 详细调优推导见 [`src/docs/TUNING_GUIDE.md`](../docs/TUNING_GUIDE.md)。
 
