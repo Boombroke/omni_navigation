@@ -1,6 +1,10 @@
 <?xml version='1.0' encoding='utf-8'?>
 <sdf version='1.7'>
   <world name='default'>
+    <physics name="sim" type="dart">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics">
     </plugin>
 
@@ -38,6 +42,19 @@
       </include>
       <pose>0.0 0.0 0 0 0 0</pose>
       <static>true</static>
+    </model>
+
+    <!-- 仿真专用(P5a): 解析地平面. 场地地面仅一块大 STL 三角网; DART 下细圆柱轮与大 trimesh
+         接触会解算发散(机器人静置约 60s 后 z→-∞ 穿地爆炸). 平面-圆柱接触精确稳定, 作主接触面
+         消除爆炸; STL 仍提供墙/坡碰撞, 不影响 costmap 感知. -->
+    <model name="flat_ground">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <surface><friction><ode><mu>0.9</mu><mu2>0.9</mu2></ode></friction></surface>
+        </collision>
+      </link>
     </model>
   </world>
 </sdf>
