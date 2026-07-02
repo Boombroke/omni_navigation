@@ -46,6 +46,8 @@ def generate_launch_description():
     rviz_config_file = LaunchConfiguration("rviz_config_file")
     use_rviz = LaunchConfiguration("use_rviz")
     use_foxglove = LaunchConfiguration("use_foxglove")
+    enable_behavior = LaunchConfiguration("enable_behavior")
+    strategy = LaunchConfiguration("strategy")
 
     configured_params = ParameterFile(
         RewrittenYaml(
@@ -158,6 +160,18 @@ def generate_launch_description():
         description="Whether to start foxglove_bridge for remote web visualization",
     )
 
+    declare_enable_behavior_cmd = DeclareLaunchArgument(
+        "enable_behavior",
+        default_value="False",
+        description="Whether to start sentry_behavior state machine + sim referee publisher",
+    )
+
+    declare_strategy_cmd = DeclareLaunchArgument(
+        "strategy",
+        default_value="rmuc_defend",
+        description="State-machine strategy for sentry_behavior_node (rmuc_defend / a / b)",
+    )
+
     start_velodyne_convert_tool = Node(
         package="ign_sim_pointcloud_tool",
         executable="ign_sim_pointcloud_tool_node",
@@ -181,6 +195,31 @@ def generate_launch_description():
                               "services", "connectionGraph", "assets"]},
         ],
         condition=IfCondition(use_foxglove),
+    )
+
+    sim_referee_publisher_node = Node(
+        package="rmu_gazebo_simulator",
+        executable="sim_referee_publisher.py",
+        name="sim_referee_publisher",
+        output="screen",
+        namespace=namespace,
+        parameters=[{"use_sim_time": use_sim_time}],
+        condition=IfCondition(enable_behavior),
+    )
+
+    sentry_behavior_node = Node(
+        package="sentry_behavior",
+        executable="sentry_behavior_node",
+        name="sentry_behavior_node",
+        output="screen",
+        namespace=namespace,
+        parameters=[
+            {"strategy": strategy},
+            {"use_sim_time": use_sim_time},
+            {"viz_enable": False},
+        ],
+        remappings=[("/goal_pose", "goal_pose")],
+        condition=IfCondition(enable_behavior),
     )
 
     rviz_cmd = IncludeLaunchDescription(
@@ -227,11 +266,15 @@ def generate_launch_description():
     ld.add_action(declare_use_rviz_cmd)
     ld.add_action(declare_use_foxglove_cmd)
     ld.add_action(declare_use_respawn_cmd)
+    ld.add_action(declare_enable_behavior_cmd)
+    ld.add_action(declare_strategy_cmd)
 
     # Add the actions to launch all of the navigation nodes
     ld.add_action(start_velodyne_convert_tool)
     ld.add_action(bringup_cmd)
     ld.add_action(rviz_cmd)
     ld.add_action(foxglove_bridge_cmd)
+    ld.add_action(sim_referee_publisher_node)
+    ld.add_action(sentry_behavior_node)
 
     return ld

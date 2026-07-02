@@ -30,6 +30,7 @@ def generate_launch_description():
     headless = LaunchConfiguration("headless")
     use_rviz = LaunchConfiguration("use_rviz")
     nav_delay = LaunchConfiguration("nav_delay")
+    enable_behavior = LaunchConfiguration("enable_behavior")
 
     declare_world_cmd = DeclareLaunchArgument(
         "world", default_value=selected_world,
@@ -46,6 +47,10 @@ def generate_launch_description():
     declare_nav_delay_cmd = DeclareLaunchArgument(
         "nav_delay", default_value="15.0",
         description="Seconds to wait after Gazebo before starting navigation",
+    )
+    declare_enable_behavior_cmd = DeclareLaunchArgument(
+        "enable_behavior", default_value="False",
+        description="Start sentry_behavior + sim referee publisher (closed-loop)",
     )
 
     gazebo_launch = IncludeLaunchDescription(
@@ -75,6 +80,7 @@ def generate_launch_description():
             "world": world,
             "slam": slam,
             "use_rviz": use_rviz,
+            "enable_behavior": enable_behavior,
         }.items(),
     )
 
@@ -87,6 +93,7 @@ def generate_launch_description():
     ld.add_action(declare_headless_cmd)
     ld.add_action(declare_use_rviz_cmd)
     ld.add_action(declare_nav_delay_cmd)
+    ld.add_action(declare_enable_behavior_cmd)
     ld.add_action(gazebo_launch)
     ld.add_action(delayed_unpause)
     ld.add_action(delayed_nav)
