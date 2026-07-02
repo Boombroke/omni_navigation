@@ -1,0 +1,98 @@
+cmake_minimum_required(VERSION 3.5)
+project(rmoss_gz_bridge)
+
+# Default to C++17
+if(NOT CMAKE_CXX_STANDARD)
+  set(CMAKE_CXX_STANDARD 17)
+endif()
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+# ros package
+find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(rmoss_interfaces REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(ros_gz_bridge REQUIRED)
+
+# Gazebo package
+find_package(gz-transport13 REQUIRED)
+set(GZ_TRANSPORT_VER ${gz-transport13_VERSION_MAJOR})
+
+find_package(gz-msgs10 REQUIRED)
+set(GZ_MSGS_VER ${gz-msgs10_VERSION_MAJOR})
+
+message(STATUS "Compiling against Gazebo Harmonic")
+
+
+# include
+include_directories(include)
+
+set(dependencies
+  rclcpp
+  rclcpp_components
+  std_msgs
+  geometry_msgs
+  sensor_msgs
+  nav_msgs
+  rmoss_interfaces
+  tf2_ros
+)
+
+# pose_bridge nodes
+add_executable(pose_bridge  src/pose_bridge_node.cpp src/pose_bridge_main.cpp)
+target_link_libraries(pose_bridge
+    gz-msgs${GZ_MSGS_VER}::core
+    gz-transport${GZ_TRANSPORT_VER}::core
+)
+ament_target_dependencies(pose_bridge ${dependencies})
+ament_target_dependencies(pose_bridge ros_gz_bridge)
+
+# rfid_bridge nodes
+add_executable(rfid_bridge  src/rfid_bridge_node.cpp src/rfid_bridge_main.cpp)
+target_link_libraries(rfid_bridge
+    gz-msgs${GZ_MSGS_VER}::core
+    gz-transport${GZ_TRANSPORT_VER}::core
+)
+ament_target_dependencies(rfid_bridge ${dependencies})
+ament_target_dependencies(rfid_bridge ros_gz_bridge)
+
+# Install include directories
+install(DIRECTORY include/
+  DESTINATION include
+)
+
+# Install libraries
+# install(TARGETS ${PROJECT_NAME}
+#     EXPORT ${PROJECT_NAME}
+#     LIBRARY DESTINATION lib
+#     ARCHIVE DESTINATION lib
+#     RUNTIME DESTINATION bin
+#     INCLUDES DESTINATION include
+# )
+
+# Install executables
+install(TARGETS
+      pose_bridge
+      rfid_bridge
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+# test
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  ament_lint_auto_find_test_dependencies()
+endif()
+
+# ament_export_targets(${PROJECT_NAME} HAS_LIBRARY_TARGET)
+ament_export_dependencies(${dependencies})
+ament_export_dependencies(gz-msgs${GZ_MSGS_VER})
+ament_export_dependencies(gz-transport${GZ_TRANSPORT_VER})
+ament_package()
