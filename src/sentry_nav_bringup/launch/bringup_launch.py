@@ -51,6 +51,7 @@ def generate_launch_description():
     use_composition = LaunchConfiguration("use_composition")
     use_respawn = LaunchConfiguration("use_respawn")
     log_level = LaunchConfiguration("log_level")
+    enable_odom_bridge = LaunchConfiguration("enable_odom_bridge")
 
     # Create our own temporary YAML files that include substitutions
     param_substitutions = {"use_sim_time": use_sim_time, "yaml_filename": map_yaml_file}
@@ -146,6 +147,12 @@ def generate_launch_description():
         "log_level", default_value="info", description="log level"
     )
 
+    declare_enable_odom_bridge_cmd = DeclareLaunchArgument(
+        "enable_odom_bridge",
+        default_value="True",
+        description="Launch odom_bridge. Set False in sim where a GT relay provides odom.",
+    )
+
     # Specify the actions
     bringup_cmd_group = GroupAction(
         [
@@ -204,6 +211,7 @@ def generate_launch_description():
                     "use_composition": use_composition,
                     "use_respawn": use_respawn,
                     "container_name": "nav2_container",
+                    "enable_odom_bridge": enable_odom_bridge,
                 }.items(),
             ),
         ]
@@ -228,6 +236,7 @@ def generate_launch_description():
     ld.add_action(declare_use_composition_cmd)
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
+    ld.add_action(declare_enable_odom_bridge_cmd)
 
     # Add the actions to launch all of the navigation nodes
     ld.add_action(bringup_cmd_group)

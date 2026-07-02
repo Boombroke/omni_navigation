@@ -15,6 +15,7 @@ install(DIRECTORY
 install(PROGRAMS
     scripts/referee_system/simple_competition_1v1.py
     scripts/referee_system/sim_referee_publisher.py
+    scripts/nav/chassis_odom_relay.py
 DESTINATION lib/${PROJECT_NAME})
 
 # environment

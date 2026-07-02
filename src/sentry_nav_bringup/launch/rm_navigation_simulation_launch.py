@@ -181,6 +181,16 @@ def generate_launch_description():
         parameters=[configured_params],
     )
 
+    chassis_odom_relay_node = Node(
+        package="rmu_gazebo_simulator",
+        executable="chassis_odom_relay.py",
+        name="chassis_odom_relay",
+        output="screen",
+        namespace=namespace,
+        parameters=[{"use_sim_time": use_sim_time}],
+        remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
+    )
+
     foxglove_bridge_cmd = Node(
         package="foxglove_bridge",
         executable="foxglove_bridge",
@@ -245,6 +255,7 @@ def generate_launch_description():
             "autostart": autostart,
             "use_composition": use_composition,
             "use_respawn": use_respawn,
+            "enable_odom_bridge": "False",
         }.items(),
     )
 
@@ -271,6 +282,7 @@ def generate_launch_description():
 
     # Add the actions to launch all of the navigation nodes
     ld.add_action(start_velodyne_convert_tool)
+    ld.add_action(chassis_odom_relay_node)
     ld.add_action(bringup_cmd)
     ld.add_action(rviz_cmd)
     ld.add_action(foxglove_bridge_cmd)

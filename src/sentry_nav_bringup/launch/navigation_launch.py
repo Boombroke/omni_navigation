@@ -38,6 +38,7 @@ def generate_launch_description():
     container_name_full = (namespace, "/", container_name)
     use_respawn = LaunchConfiguration("use_respawn")
     log_level = LaunchConfiguration("log_level")
+    enable_odom_bridge = LaunchConfiguration("enable_odom_bridge")
 
     lifecycle_nodes = [
         "controller_server",
@@ -114,6 +115,12 @@ def generate_launch_description():
         "log_level", default_value="info", description="log level"
     )
 
+    declare_enable_odom_bridge_cmd = DeclareLaunchArgument(
+        "enable_odom_bridge",
+        default_value="True",
+        description="Launch odom_bridge (Point-LIO -> odom). Set False in sim where a GT relay provides odom.",
+    )
+
     start_terrain_analysis_cmd = Node(
         package="terrain_analysis",
         executable="terrainAnalysis",
@@ -144,6 +151,7 @@ def generate_launch_description():
                 executable="odom_bridge_node",
                 name="odom_bridge",
                 output="screen",
+                condition=IfCondition(enable_odom_bridge),
                 respawn=use_respawn,
                 respawn_delay=2.0,
                 parameters=[configured_params],
@@ -257,12 +265,6 @@ def generate_launch_description():
         target_container=container_name_full,
         composable_node_descriptions=[
             ComposableNode(
-                package="odom_bridge",
-                plugin="odom_bridge::OdomBridgeNode",
-                name="odom_bridge",
-                parameters=[configured_params],
-            ),
-            ComposableNode(
                 package="fake_vel_transform",
                 plugin="fake_vel_transform::FakeVelTransform",
                 name="fake_vel_transform",
@@ -336,9 +338,23 @@ def generate_launch_description():
         ],
     )
 
+    load_composable_odom_bridge = LoadComposableNodes(
+        condition=IfCondition(
+            PythonExpression([use_composition, " and ", enable_odom_bridge])
+        ),
+        target_container=container_name_full,
+        composable_node_descriptions=[
+            ComposableNode(
+                package="odom_bridge",
+                plugin="odom_bridge::OdomBridgeNode",
+                name="odom_bridge",
+                parameters=[configured_params],
+            ),
+        ],
+    )
+
     # Create the launch description and populate
     ld = LaunchDescription()
-
     # Set environment variables
     ld.add_action(stdout_linebuf_envvar)
     ld.add_action(colorized_output_envvar)
@@ -352,10 +368,12 @@ def generate_launch_description():
     ld.add_action(declare_container_name_cmd)
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
+    ld.add_action(declare_enable_odom_bridge_cmd)
     # Add the actions to launch all of the navigation nodes
     ld.add_action(start_terrain_analysis_cmd)
     ld.add_action(start_terrain_analysis_ext_cmd)
     ld.add_action(load_nodes)
     ld.add_action(load_composable_nodes)
+    ld.add_action(load_composable_odom_bridge)
 
     return ld
