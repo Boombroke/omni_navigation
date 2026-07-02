@@ -485,13 +485,15 @@ local_costmap:
         z_voxels: 16
         min_obstacle_height: 0.0
         max_obstacle_height: 2.0
-        min_obstacle_intensity: 0.3
+        min_obstacle_intensity: 100.0
         max_obstacle_intensity: 2.0
         observation_sources: terrain_map
         terrain_map:
           data_type: PointCloud2
           topic: <robot_namespace>/terrain_map
           sensor_frame: front_mid360
+          expected_update_rate: 0.0
+          observation_persistence: 0.0
           min_obstacle_height: 0.0
           max_obstacle_height: 2.0
           obstacle_max_range: 5.0
@@ -538,13 +540,15 @@ global_costmap:
         z_voxels: 16
         min_obstacle_height: 0.0
         max_obstacle_height: 2.0
-        min_obstacle_intensity: 0.3
+        min_obstacle_intensity: 100.0
         max_obstacle_intensity: 2.0
         observation_sources: terrain_map_ext
         terrain_map_ext:
           data_type: PointCloud2
           topic: <robot_namespace>/terrain_map_ext
           sensor_frame: front_mid360
+          expected_update_rate: 0.0
+          observation_persistence: 0.0
           min_obstacle_height: 0.0
           max_obstacle_height: 2.0
           obstacle_max_range: 10.0
