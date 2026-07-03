@@ -62,3 +62,20 @@ Point-LIO
                                               ├── lidar_odometry              ──▶ terrain_analysis_ext
                                               └── sensor_scan                 ──▶ (诊断/可视化)
 ```
+
+## 仿真说明
+
+**仿真模式下 `odom_bridge` 被禁用**，C++ 代码本身未做任何修改。
+
+`navigation_launch.py` / `bringup_launch.py` 新增 `enable_odom_bridge` launch 参数（默认 `True`，实车行为不变）。仿真 launch 传 `enable_odom_bridge:=False` 关闭本节点，改由 `rmu_gazebo_simulator` 的 `chassis_odom_relay.py` 接管相同职责：
+
+| 职责 | 实车（odom_bridge） | 仿真（chassis_odom_relay.py） |
+|------|--------------------|-----------------------------|
+| `odom→base_footprint` TF | Point-LIO 位姿推算 | Gazebo GT（`chassis_odometry_gt`） |
+| `odometry` | Point-LIO 差分 | GT 转换 |
+| `chassis_odometry` | Point-LIO 差分（惯性轴） | GT 转换（惯性轴，供 MPPI） |
+| `registered_scan` / `lidar_odometry` | odom_bridge 发布 | chassis_odom_relay 透传 |
+
+**切换原因**：仿真 Point-LIO 位姿抖动约 8mm/帧，静止时 `chassis_odometry` 出现 ±0.1m/s 幽灵速度，导致 MPPI 速度反馈失真（过保守或触发 `Optimizer fail`）。Gazebo GT 真值（1000Hz，精确无噪声）消除该问题，实现仿真自主导航零 `Optimizer fail`。
+
+两路**不能同时运行**，会产生冲突的 `odom→base_footprint` TF 广播。

@@ -122,7 +122,21 @@ ros2 launch sentry_nav_bringup rm_multi_navigation_simulation_launch.py
 | `rmuc_2026` | RMUC 2026 赛季标准场地（**默认，已验证导航**） |
 | `rmul_2026` | RMUL 2026 小场地 |
 
-世界文件位于 `rmu_gazebo_simulator/worlds/`。物理引擎：DART，地面使用解析平面（`<plane>`）+ `max_step_size=0.001` 防止圆柱轮-三角网接触发散。机器人 spawn 位置由 launch 文件指定，默认 z=0.05（减少冲击）。
+世界文件位于 `rmu_gazebo_simulator/worlds/`。
+
+### 6.1 物理稳定性修复（rmuc_2026）
+
+**问题**：机器人静置约 60s 后 GT z 坐标发散至 `-∞`（-56000+），roll 翻转——纯 Gazebo 物理不稳，与导航无关。根因：场地地面为单块大 STL 三角网（`rmuc_2026.stl`），世界 SDF 原无 `<physics>` 块；细圆柱轮（r≈0.076m）与大 trimesh 接触时，默认 DART LCP 解算发散。
+
+**修复（commit `8813da8`）**：
+
+1. 新增 `<physics name="sim" type="dart">` 块，`max_step_size=0.001`（缩小步长，稳定 LCP 迭代）。
+2. 新增解析地平面模型 `flat_ground`（`<plane>` 法向 `(0,0,1)`，尺寸 100×100m），摩擦 `mu=mu2=0.9`——平面-圆柱接触精确稳定，作主接触面；原 STL 保留（提供墙/坡碰撞与感知），不影响 costmap。
+3. 机器人 spawn z 降至 **0.05**（原 0.3），减少落地冲击。
+
+**轮摩擦说明**：车轮 `mu=0.9` 定义在 `chassis_wheel.def.xmacro`（生效文件）。`rmua19_standard_robot/model.sdf` 中的 `mu=0.2` 是 xmacro 自动生成的死文件，**不生效，无需修改**。
+
+**验证**：无头运行约 92s，GT roll≈-1°，z≈0.05，稳定不爆炸。
 
 ---
 
