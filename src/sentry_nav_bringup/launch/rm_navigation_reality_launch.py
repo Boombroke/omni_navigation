@@ -47,6 +47,7 @@ def generate_launch_description():
     use_robot_state_pub = LaunchConfiguration("use_robot_state_pub")
     use_rviz = LaunchConfiguration("use_rviz")
     use_foxglove = LaunchConfiguration("use_foxglove")
+    use_serial_driver = LaunchConfiguration("use_serial_driver")
 
     # Declare the launch arguments
     declare_namespace_cmd = DeclareLaunchArgument(
@@ -155,6 +156,12 @@ def generate_launch_description():
         description="Whether to start foxglove_bridge for remote web visualization",
     )
 
+    declare_use_serial_driver_cmd = DeclareLaunchArgument(
+        "use_serial_driver",
+        default_value="True",
+        description="Whether to start rm_serial_driver for chassis control",
+    )
+
     # Create our own temporary YAML files that include substitutions
 
     configured_params = ParameterFile(
@@ -186,6 +193,20 @@ def generate_launch_description():
         output="screen",
         namespace=namespace,
         parameters=[configured_params],
+    )
+
+    serial_dir = get_package_share_directory("rm_serial_driver")
+    serial_config = os.path.join(serial_dir, "config", "serial_driver.yaml")
+
+    serial_driver_node = Node(
+        package="rm_serial_driver",
+        executable="rm_serial_driver_node",
+        namespace=namespace,
+        output="screen",
+        emulate_tty=True,
+        parameters=[serial_config],
+        arguments=["--ros-args", "--log-level", "rm_serial_driver:=info"],
+        condition=IfCondition(use_serial_driver),
     )
 
     foxglove_bridge_cmd = Node(
@@ -256,11 +277,13 @@ def generate_launch_description():
     ld.add_action(declare_use_robot_state_pub_cmd)
     ld.add_action(declare_use_rviz_cmd)
     ld.add_action(declare_use_foxglove_cmd)
+    ld.add_action(declare_use_serial_driver_cmd)
     ld.add_action(declare_use_respawn_cmd)
 
     # Add the actions to launch all of the navigation nodes
     ld.add_action(start_robot_state_publisher_cmd)
     ld.add_action(start_livox_ros_driver2_node)
+    ld.add_action(serial_driver_node)
     ld.add_action(bringup_cmd)
     ld.add_action(rviz_cmd)
     ld.add_action(foxglove_bridge_cmd)

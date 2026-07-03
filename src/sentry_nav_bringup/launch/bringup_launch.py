@@ -163,7 +163,7 @@ def generate_launch_description():
                 condition=IfCondition(use_composition),
                 name="nav2_container",
                 package="rclcpp_components",
-                executable="component_container_isolated",
+                executable="component_container_mt",
                 parameters=[configured_params, {"autostart": autostart}],
                 arguments=["--ros-args", "--log-level", log_level],
                 output="screen",

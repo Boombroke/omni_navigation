@@ -18,7 +18,16 @@ OdomBridgeNode::OdomBridgeNode(const rclcpp::NodeOptions & options)
   previous_transform_(tf2::Transform::getIdentity()),
   previous_time_(std::chrono::steady_clock::time_point::min()),
   has_previous_chassis_transform_(false),
-  previous_chassis_transform_(tf2::Transform::getIdentity())
+  previous_chassis_transform_(tf2::Transform::getIdentity()),
+  smoothing_alpha_(0.3),
+  smoothing_initialized_(false),
+  filtered_transform_(tf2::Transform::getIdentity()),
+  filtered_yaw_(0.0),
+  velocity_smoothing_alpha_(0.15),
+  velocity_smoothing_initialized_(false),
+  filtered_linear_vel_x_(0.0),
+  filtered_linear_vel_y_(0.0),
+  filtered_angular_vel_z_(0.0)
 {
   this->declare_parameter<std::string>("state_estimation_topic", "aft_mapped_to_init");
   this->declare_parameter<std::string>("registered_scan_topic", "cloud_registered");
@@ -27,12 +36,26 @@ OdomBridgeNode::OdomBridgeNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("lidar_frame", "front_mid360");
   this->declare_parameter<std::string>("robot_base_frame", "gimbal_yaw");
 
+  this->declare_parameter<double>("smoothing_alpha", 0.3);
+  this->declare_parameter<double>("velocity_smoothing_alpha", 0.15);
+
   this->get_parameter("state_estimation_topic", state_estimation_topic_);
   this->get_parameter("registered_scan_topic", registered_scan_topic_);
   this->get_parameter("odom_frame", odom_frame_);
   this->get_parameter("base_frame", base_frame_);
   this->get_parameter("lidar_frame", lidar_frame_);
   this->get_parameter("robot_base_frame", robot_base_frame_);
+  this->get_parameter("smoothing_alpha", smoothing_alpha_);
+  this->get_parameter("velocity_smoothing_alpha", velocity_smoothing_alpha_);
+
+  // Clamp alpha to valid range
+  if (smoothing_alpha_ < 0.0) smoothing_alpha_ = 0.0;
+  if (smoothing_alpha_ > 1.0) smoothing_alpha_ = 1.0;
+  if (velocity_smoothing_alpha_ < 0.0) velocity_smoothing_alpha_ = 0.0;
+  if (velocity_smoothing_alpha_ > 1.0) velocity_smoothing_alpha_ = 1.0;
+
+  RCLCPP_INFO(this->get_logger(), "Odom TF smoothing alpha: %.2f", smoothing_alpha_);
+  RCLCPP_INFO(this->get_logger(), "Velocity smoothing alpha: %.2f", velocity_smoothing_alpha_);
 
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
@@ -70,8 +93,7 @@ void OdomBridgeNode::lidarOdometryAndPointCloudCallback(
   if (!base_frame_to_lidar_initialized_) {
     try {
       const auto tf_stamped = tf_buffer_->lookupTransform(
-        base_frame_, lidar_frame_, odometry_msg->header.stamp,
-        rclcpp::Duration::from_seconds(0.5));
+        base_frame_, lidar_frame_, tf2::TimePointZero);
       tf2::Transform tf_base_frame_to_lidar;
       tf2::fromMsg(tf_stamped.transform, tf_base_frame_to_lidar);
 
@@ -102,7 +124,43 @@ void OdomBridgeNode::lidarOdometryAndPointCloudCallback(
 
   tf2::Transform tf_lidar_odom_to_lidar;
   tf2::fromMsg(odometry_msg->pose.pose, tf_lidar_odom_to_lidar);
-  const tf2::Transform tf_odom_to_lidar = tf_odom_to_lidar_odom_ * tf_lidar_odom_to_lidar;
+  tf2::Transform tf_odom_to_lidar = tf_odom_to_lidar_odom_ * tf_lidar_odom_to_lidar;
+
+  // --- EMA low-pass filter on odom->lidar pose (eliminates Point-LIO micro-jitter in RViz) ---
+  if (smoothing_alpha_ > 0.0) {
+    const auto & origin = tf_odom_to_lidar.getOrigin();
+    double roll, pitch, yaw;
+    tf2::Matrix3x3(tf_odom_to_lidar.getRotation()).getRPY(roll, pitch, yaw);
+
+    if (!smoothing_initialized_) {
+      filtered_transform_ = tf_odom_to_lidar;
+      filtered_yaw_ = yaw;
+      smoothing_initialized_ = true;
+    } else {
+      const double a = smoothing_alpha_;
+      const auto & fx = filtered_transform_.getOrigin().x();
+      const auto & fy = filtered_transform_.getOrigin().y();
+      const auto & fz = filtered_transform_.getOrigin().z();
+      tf_odom_to_lidar.setOrigin(tf2::Vector3(
+        a * origin.x() + (1.0 - a) * fx,
+        a * origin.y() + (1.0 - a) * fy,
+        a * origin.z() + (1.0 - a) * fz));
+
+      // Filter yaw with wrap-around handling
+      double dyaw = yaw - filtered_yaw_;
+      while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
+      while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
+      filtered_yaw_ += a * dyaw;
+      while (filtered_yaw_ > M_PI) filtered_yaw_ -= 2.0 * M_PI;
+      while (filtered_yaw_ < -M_PI) filtered_yaw_ += 2.0 * M_PI;
+
+      tf2::Quaternion q_f;
+      q_f.setRPY(0.0, 0.0, filtered_yaw_);
+      tf_odom_to_lidar.setRotation(q_f);
+      filtered_transform_ = tf_odom_to_lidar;
+    }
+  }
+  // --- End EMA filter ---
 
   const tf2::Transform tf_lidar_to_chassis =
     getTransform(lidar_frame_, base_frame_, pcd_msg->header.stamp);
@@ -153,8 +211,13 @@ tf2::Transform OdomBridgeNode::getTransform(
   const std::string & target_frame, const std::string & source_frame, const rclcpp::Time & time)
 {
   try {
+    // Use TimePointZero (latest available) instead of exact timestamp.
+    // Static URDF transforms (base_footprint->front_mid360 etc.) are published
+    // by robot_state_publisher slightly behind Point-LIO timestamps, causing
+    // "extrapolation into the future" errors. Latest-value lookup is correct
+    // for static transforms and eliminates the associated position glitches.
     const auto transform_stamped = tf_buffer_->lookupTransform(
-      target_frame, source_frame, time, rclcpp::Duration::from_seconds(0.5));
+      target_frame, source_frame, tf2::TimePointZero);
     tf2::Transform transform;
     tf2::fromMsg(transform_stamped.transform, transform);
     return transform;
@@ -203,12 +266,34 @@ void OdomBridgeNode::publishOdometry(
         transform.getRotation() * previous_transform_.getRotation().inverse();
       const auto angular_velocity = q_diff.getAxis() * q_diff.getAngle() / dt;
 
-      out.twist.twist.linear.x = linear_velocity.x();
-      out.twist.twist.linear.y = linear_velocity.y();
-      out.twist.twist.linear.z = linear_velocity.z();
-      out.twist.twist.angular.x = angular_velocity.x();
-      out.twist.twist.angular.y = angular_velocity.y();
-      out.twist.twist.angular.z = angular_velocity.z();
+      // --- EMA low-pass filter on velocity (suppresses finite-difference noise) ---
+      double vx = linear_velocity.x();
+      double vy = linear_velocity.y();
+      double vz = angular_velocity.z();
+      if (velocity_smoothing_alpha_ > 0.0) {
+        const double a = velocity_smoothing_alpha_;
+        if (!velocity_smoothing_initialized_) {
+          filtered_linear_vel_x_ = vx;
+          filtered_linear_vel_y_ = vy;
+          filtered_angular_vel_z_ = vz;
+          velocity_smoothing_initialized_ = true;
+        } else {
+          filtered_linear_vel_x_ = a * vx + (1.0 - a) * filtered_linear_vel_x_;
+          filtered_linear_vel_y_ = a * vy + (1.0 - a) * filtered_linear_vel_y_;
+          filtered_angular_vel_z_ = a * vz + (1.0 - a) * filtered_angular_vel_z_;
+        }
+        vx = filtered_linear_vel_x_;
+        vy = filtered_linear_vel_y_;
+        vz = filtered_angular_vel_z_;
+      }
+      // --- End velocity EMA filter ---
+
+      out.twist.twist.linear.x = vx;
+      out.twist.twist.linear.y = vy;
+      out.twist.twist.linear.z = 0.0;
+      out.twist.twist.angular.x = 0.0;
+      out.twist.twist.angular.y = 0.0;
+      out.twist.twist.angular.z = vz;
     }
 
     previous_transform_ = transform;

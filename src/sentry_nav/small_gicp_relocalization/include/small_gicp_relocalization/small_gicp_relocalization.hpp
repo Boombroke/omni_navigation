@@ -151,7 +151,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr cloud_clearing_pub_;
 
   bool global_map_ready_ = false;
-  bool has_localized_ = false;
+  std::atomic<bool> has_localized_{false};
   int consecutive_periodic_failures_ = 0;
   Eigen::Isometry3d accumulation_snapshot_t_ = Eigen::Isometry3d::Identity();
   double terrain_clearing_threshold_;
@@ -181,6 +181,7 @@ private:
   std::unique_ptr<ScanContextDB> sc_db_;
   bool global_relocalization_ready_{false};
   std::atomic<bool> global_running_{false};
+  std::atomic<bool> cold_start_running_{false};
   std::chrono::steady_clock::time_point last_global_attempt_time_;
 
   // Manual override: once /initialpose received, all automatic relocalization
