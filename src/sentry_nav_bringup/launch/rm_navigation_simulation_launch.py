@@ -17,7 +17,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, TextSubstitution
@@ -229,6 +229,15 @@ def generate_launch_description():
             {"viz_enable": False},
         ],
         remappings=[("/goal_pose", "goal_pose")],
+    )
+
+    # 延时 8s 启动状态机(同实车 rm_sentry_launch 的 8s 机制)。本内层 launch 在 nav_delay
+    # 时刻加载,Nav2 bringup 与状态机同刻启动,但 Nav2 lifecycle 需数秒才激活;状态机若在
+    # bt_navigator 激活前发首个 /goal_pose,会被 "Action server is inactive. Rejecting"
+    # 拒绝且 GoalPublisher dedup 不重发 → 机器人拿不到目标。延时 8s 待 nav 激活后再起。
+    delayed_sentry_behavior_cmd = TimerAction(
+        period=8.0,
+        actions=[sentry_behavior_node],
         condition=IfCondition(enable_behavior),
     )
 
@@ -287,6 +296,6 @@ def generate_launch_description():
     ld.add_action(rviz_cmd)
     ld.add_action(foxglove_bridge_cmd)
     ld.add_action(sim_referee_publisher_node)
-    ld.add_action(sentry_behavior_node)
+    ld.add_action(delayed_sentry_behavior_cmd)
 
     return ld
