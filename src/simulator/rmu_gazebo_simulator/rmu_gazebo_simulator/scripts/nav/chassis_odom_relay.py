@@ -171,6 +171,10 @@ class ChassisOdomRelay(Node):
     def _scan_cb(self, msg: PointCloud2):
         # 透传 Point-LIO 已配准点云为 registered_scan (odom 系, 供 terrain_analysis);
         # 同步发 lidar_odometry (odom -> lidar_frame, 供 terrain_analysis_ext)。
+        # 点云已在 odom 原点系, 但源 frame_id 为孤儿 (camera_init), 未接入命名空间化 TF 树 ->
+        # pointcloud_to_laserscan/terrain 变换失败 -> slam 偶发缺 scan, RViz 地图错位。
+        # 显式改回 odom_frame (与 odom_bridge 契约一致), 使点云 frame 落在有效 TF 树上。
+        msg.header.frame_id = self.odom_frame
         self.registered_scan_pub.publish(msg)
         if not self._have_init or self._last_gt is None:
             return
