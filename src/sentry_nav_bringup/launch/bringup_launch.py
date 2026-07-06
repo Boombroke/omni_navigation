@@ -52,6 +52,7 @@ def generate_launch_description():
     use_respawn = LaunchConfiguration("use_respawn")
     log_level = LaunchConfiguration("log_level")
     enable_odom_bridge = LaunchConfiguration("enable_odom_bridge")
+    obstacle_cloud_topic = LaunchConfiguration("obstacle_cloud_topic")
 
     # Create our own temporary YAML files that include substitutions
     param_substitutions = {"use_sim_time": use_sim_time, "yaml_filename": map_yaml_file}
@@ -153,6 +154,12 @@ def generate_launch_description():
         description="Launch odom_bridge. Set False in sim where a GT relay provides odom.",
     )
 
+    declare_obstacle_cloud_topic_cmd = DeclareLaunchArgument(
+        "obstacle_cloud_topic",
+        default_value="terrain_map_ext",
+        description="Obstacle-scan input cloud forwarded to slam_launch (sim overrides with velodyne_points).",
+    )
+
     # Specify the actions
     bringup_cmd_group = GroupAction(
         [
@@ -179,6 +186,7 @@ def generate_launch_description():
                     "autostart": autostart,
                     "use_respawn": use_respawn,
                     "params_file": params_file,
+                    "obstacle_cloud_topic": obstacle_cloud_topic,
                 }.items(),
             ),
             IncludeLaunchDescription(
@@ -237,6 +245,7 @@ def generate_launch_description():
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
     ld.add_action(declare_enable_odom_bridge_cmd)
+    ld.add_action(declare_obstacle_cloud_topic_cmd)
 
     # Add the actions to launch all of the navigation nodes
     ld.add_action(bringup_cmd_group)

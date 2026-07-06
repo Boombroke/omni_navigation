@@ -217,9 +217,9 @@ pointcloud_to_laserscan:
   ros__parameters:
     use_sim_time: True
     target_frame: base_footprint
-    min_height: -0.5
-    max_height: 6.0
-    min_intensity: 0.3
+    min_height: 0.2
+    max_height: 2.0
+    min_intensity: 0.0
     max_intensity: 2.0
     angle_min: -3.1415926                   # -M_PI/2
     angle_max: 3.1415926                    # M_PI/2
@@ -520,8 +520,8 @@ global_costmap:
       track_unknown_space: true
       # 仿真专用(P5a): 全局图改滚动窗口 + 固定 20m. 非滚动时尺寸取决于 slam /map, 而 sim 稀疏
       # obstacle_scan 建出的图过小 → 目标落图外(planner "outside bounds"). static_layer 保留(勿删):
-      # IntensityVoxelLayer(liblayers.so)未直连 nav2_costmap_2d 核心, 需其先加载符号; 且 /map 已由
-      # pointcloud_to_laserscan min_intensity 过滤干净, 不再引入假障碍.
+      # IntensityVoxelLayer(liblayers.so)未直连 nav2_costmap_2d 核心, 需其先加载符号; 且 /map 由
+      # pointcloud_to_laserscan 对原始 velodyne_points 做高度过滤(min_height 去地面/max_height 去天花板)建出, GT 一致不引入偏移假障碍.
       rolling_window: true
       width: 20
       height: 20

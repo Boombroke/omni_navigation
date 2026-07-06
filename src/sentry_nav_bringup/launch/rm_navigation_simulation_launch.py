@@ -191,6 +191,26 @@ def generate_launch_description():
         remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
     )
 
+    # Gazebo publishes the lidar cloud in the scoped sensor frame
+    # "<model>/front_mid360/front_mid360_lidar" (offset +0.03m z from the URDF link,
+    # per the sensor <pose>), which is NOT in robot_state_publisher's TF tree. Bridge it
+    # to the URDF "front_mid360" link so pointcloud_to_laserscan can transform the raw
+    # velodyne_points into base_footprint via the GT chain -> GT-accurate slam map.
+    lidar_sensor_frame_tf = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="lidar_sensor_frame_tf",
+        output="screen",
+        namespace=namespace,
+        arguments=[
+            "--x", "0", "--y", "0", "--z", "0.03",
+            "--roll", "0", "--pitch", "0", "--yaw", "0",
+            "--frame-id", "front_mid360",
+            "--child-frame-id", [namespace, "/front_mid360/front_mid360_lidar"],
+        ],
+        remappings=[("/tf", "tf"), ("/tf_static", "tf_static")],
+    )
+
     foxglove_bridge_cmd = Node(
         package="foxglove_bridge",
         executable="foxglove_bridge",
@@ -265,6 +285,7 @@ def generate_launch_description():
             "use_composition": use_composition,
             "use_respawn": use_respawn,
             "enable_odom_bridge": "False",
+            "obstacle_cloud_topic": "velodyne_points",
         }.items(),
     )
 
@@ -292,6 +313,7 @@ def generate_launch_description():
     # Add the actions to launch all of the navigation nodes
     ld.add_action(start_velodyne_convert_tool)
     ld.add_action(chassis_odom_relay_node)
+    ld.add_action(lidar_sensor_frame_tf)
     ld.add_action(bringup_cmd)
     ld.add_action(rviz_cmd)
     ld.add_action(foxglove_bridge_cmd)

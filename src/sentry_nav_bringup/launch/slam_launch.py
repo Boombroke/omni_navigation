@@ -35,6 +35,7 @@ def generate_launch_description():
     autostart = LaunchConfiguration("autostart")
     use_respawn = LaunchConfiguration("use_respawn")
     log_level = LaunchConfiguration("log_level")
+    obstacle_cloud_topic = LaunchConfiguration("obstacle_cloud_topic")
 
     # Variables
     lifecycle_nodes = ["slam_toolbox", "map_saver"]
@@ -85,6 +86,16 @@ def generate_launch_description():
         "log_level", default_value="info", description="log level"
     )
 
+    declare_obstacle_cloud_topic_cmd = DeclareLaunchArgument(
+        "obstacle_cloud_topic",
+        default_value="terrain_map_ext",
+        description=(
+            "Input point cloud for slam obstacle_scan. Reality/default: terrain_map_ext "
+            "(ground-removed, Point-LIO-consistent). Simulation passes velodyne_points "
+            "(raw GT-framed lidar) so the map matches the GT pose."
+        ),
+    )
+
     start_map_saver_server_cmd = Node(
         package="nav2_map_server",
         executable="map_saver_server",
@@ -118,7 +129,7 @@ def generate_launch_description():
         parameters=[configured_params],
         arguments=["--ros-args", "--log-level", log_level],
         remappings=[
-            ("cloud_in", "terrain_map_ext"),
+            ("cloud_in", obstacle_cloud_topic),
             ("scan", "obstacle_scan"),
         ],
     )
@@ -188,6 +199,7 @@ def generate_launch_description():
     ld.add_action(declare_autostart_cmd)
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
+    ld.add_action(declare_obstacle_cloud_topic_cmd)
 
     # Running Map Saver Server
     ld.add_action(start_map_saver_server_cmd)
