@@ -25,6 +25,7 @@
 #include <gz/sim/components/Pose.hh>
 #include <gz/sim/components/LinearVelocity.hh>
 #include <gz/sim/components/AngularVelocity.hh>
+#include <gz/sim/components/JointVelocityCmd.hh>
 #include <gz/sim/Link.hh>
 #include <gz/sim/Model.hh>
 #include <gz/sim/Util.hh>
@@ -142,8 +143,7 @@ void MecanumDrive2::Configure(const Entity &_entity,
 void MecanumDrive2::PreUpdate(const gz::sim::UpdateInfo &_info,
                              gz::sim::EntityComponentManager &_ecm)
 {
-    //control for chassis
-    Link chassisLink(this->dataPtr->chassisLink);
+    // ensure chassis state components exist (read by UpdateOdometry in PostUpdate)
     if (!_ecm.Component<components::WorldPose>(this->dataPtr->chassisLink))
     {
         _ecm.CreateComponent(this->dataPtr->chassisLink, components::WorldPose());
@@ -162,32 +162,37 @@ void MecanumDrive2::PreUpdate(const gz::sim::UpdateInfo &_info,
         std::lock_guard<std::mutex> lock(this->dataPtr->targetVelMutex);
         targetVel = this->dataPtr->targetVel;
     }
-    //current state
+    //current state (chassis pose is only used to seed the odometry origin initPose)
     const auto chassisPose = _ecm.Component<components::WorldPose>(this->dataPtr->chassisLink)->Data();
-    const auto linearVel = _ecm.Component<components::LinearVelocity>(this->dataPtr->chassisLink)->Data();
-    const auto angularVel = _ecm.Component<components::AngularVelocity>(this->dataPtr->chassisLink)->Data();
     if (!this->dataPtr->initFlag)
     {
         this->dataPtr->initPose = chassisPose;
         this->dataPtr->initFlag = true;
     }
-    //for linear velocity control
-    double xErr = linearVel.X() - targetVel.linear().x();
-    double xCmd = this->dataPtr->xPid.Update(xErr, _info.dt);
-    double yErr = linearVel.Y() - targetVel.linear().y();
-    double yCmd = this->dataPtr->yPid.Update(yErr, _info.dt);
-    //for angular velocity control
-    double wErr = angularVel.Z() - targetVel.angular().z();
-    double wCmd = this->dataPtr->wPid.Update(wErr, _info.dt);
-    //force and torque on chassis link frame
-    math::Vector3d tmpForce(xCmd, yCmd, 0);
-    math::Vector3d tmpTorque(0, 0, wCmd);
-    // transform to world frame
-    auto force = chassisPose.Rot().RotateVector(tmpForce);
-    auto torque = chassisPose.Rot().RotateVector(tmpTorque);
-    // gzmsg << "MecanumDrive2 (force,torque):[" << force << "], [" << torque << "]" << std::endl;
-    // Apply the wrench
-    chassisLink.AddWorldWrench(_ecm, force, torque);
+    // 麦轮逆运动学: 由底盘速度 (vx, vy, wz) 解算 4 轮角速度, 经 JointVelocityCmd 驱动轮关节,
+    // 配合各向异性轮摩擦 (fdir1 45°) 实现全向平移/旋转。几何 k=lx+ly=0.401, 轮半径 r=0.0758。
+    const double k = 0.401;
+    const double r = 0.0758;
+    const double vx = targetVel.linear().x();
+    const double vy = targetVel.linear().y();
+    const double wz = targetVel.angular().z();
+    double wheelSpeed[WHEEL_NUM];
+    wheelSpeed[MecanumDrive2Private::FRONT_LEFT] = (vx - vy - k * wz) / r;
+    wheelSpeed[MecanumDrive2Private::FRONT_RIGHT] = (vx + vy + k * wz) / r;
+    wheelSpeed[MecanumDrive2Private::REAR_LEFT] = (vx + vy - k * wz) / r;
+    wheelSpeed[MecanumDrive2Private::REAR_RIGHT] = (vx - vy + k * wz) / r;
+    for (int i = 0; i < WHEEL_NUM; i++)
+    {
+        auto vel = _ecm.Component<components::JointVelocityCmd>(this->dataPtr->wheelJoints[i]);
+        if (vel == nullptr)
+        {
+            _ecm.CreateComponent(this->dataPtr->wheelJoints[i], components::JointVelocityCmd({wheelSpeed[i]}));
+        }
+        else
+        {
+            *vel = components::JointVelocityCmd({wheelSpeed[i]});
+        }
+    }
 }
 void MecanumDrive2::PostUpdate(const gz::sim::UpdateInfo &_info,
                               const gz::sim::EntityComponentManager &_ecm)

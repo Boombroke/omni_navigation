@@ -4,7 +4,7 @@
     <!-- <xmacro_define_value name="wheel_width" value="0.0452" /> -->
     <!-- <xmacro_define_value name="wheel_radius" value="0.0758" /> -->
     <!--macro defination: chassis_wheel-->
-    <xmacro_define_block name="chassis_wheel_l" params="prefix parent pose">
+    <xmacro_define_block name="chassis_wheel_l" params="prefix parent pose" xmlns:gz="http://gazebosim.org/schema">
         <joint name="${prefix}_wheel_joint" type="revolute">
             <pose relative_to="${parent}">${pose}</pose>
             <parent>${parent}</parent>
@@ -29,13 +29,13 @@
                 <xmacro_block name="geometry_mesh" uri="model://rmua19_standard_robot/meshes/wheel_left.dae"/>
             </visual>
             <collision name="${prefix}_wheel_collision">
-                <pose>0 0 0 1.5707 0 0</pose>
-                <xmacro_block name="geometry_cylinder" r="0.0758" l="0.0452"/>
+                <xmacro_block name="geometry_sphere" r="0.0758"/>
                 <surface>
                     <friction>
                         <ode>
-                            <mu>0.9</mu>
-                            <mu2>0.9</mu2>
+                            <mu>1.0</mu>
+                            <mu2>0.0</mu2>
+                            <fdir1 gz:expressed_in="chassis">1 -1 0</fdir1>
                         </ode>
                     </friction>
                 </surface>
@@ -43,7 +43,7 @@
         </link>
     </xmacro_define_block>
     <!--macro defination: chassis_wheel-->
-    <xmacro_define_block name="chassis_wheel_r" params="prefix parent pose">
+    <xmacro_define_block name="chassis_wheel_r" params="prefix parent pose" xmlns:gz="http://gazebosim.org/schema">
         <joint name="${prefix}_wheel_joint" type="revolute">
             <pose relative_to="${parent}">${pose}</pose>
             <parent>${parent}</parent>
@@ -68,13 +68,13 @@
                 <xmacro_block name="geometry_mesh" uri="model://rmua19_standard_robot/meshes/wheel_right.dae"/>
             </visual>
             <collision name="${prefix}_wheel_collision">
-                <pose>0 0 0 1.5707 0 0</pose>
-                <xmacro_block name="geometry_cylinder" r="0.0758" l="0.0452"/>
+                <xmacro_block name="geometry_sphere" r="0.0758"/>
                 <surface>
                     <friction>
                         <ode>
-                            <mu>0.9</mu>
-                            <mu2>0.9</mu2>
+                            <mu>1.0</mu>
+                            <mu2>0.0</mu2>
+                            <fdir1 gz:expressed_in="chassis">1 1 0</fdir1>
                         </ode>
                     </friction>
                 </surface>
