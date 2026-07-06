@@ -397,13 +397,13 @@ controller_server:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 40
       model_dt: 0.05                    # 必须 ≥ 控制周期(1/30≈0.0333); 预测时域 = model_dt×time_steps = 2.0s
-      batch_size: 1000                  # CPU 保守起步; 实测有余量可加到 2000
+      batch_size: 2000                  # 采样数↑: 更平滑轨迹 + 收敛到更高速度
       vx_max: 1.5
       vx_min: -1.5
       vy_max: 1.5                        # 全向: 侧向全速
       wz_max: 0.5                        # 低角速度权限: 航向由自旋/云台负责(don't-care), 防底盘空转
-      vx_std: 0.2
-      vy_std: 0.2
+      vx_std: 0.5
+      vy_std: 0.5
       wz_std: 0.2
       ax_max: 3.0
       ax_min: -3.0
@@ -430,7 +430,7 @@ controller_server:
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 3.81
+        cost_weight: 2.5
         critical_cost: 300.0
         consider_footprint: false
         collision_cost: 1000000.0
@@ -440,7 +440,7 @@ controller_server:
         enabled: true
         cost_power: 1
         cost_weight: 5.0
-        threshold_to_consider: 1.4
+        threshold_to_consider: 2.5
       PathAlignCritic:
         enabled: true
         cost_power: 1
@@ -454,8 +454,8 @@ controller_server:
         enabled: true
         cost_power: 1
         cost_weight: 5.0
-        offset_from_furthest: 5
-        threshold_to_consider: 1.4
+        offset_from_furthest: 15
+        threshold_to_consider: 2.5
 
 local_costmap:
   local_costmap:
@@ -469,7 +469,7 @@ local_costmap:
       width: 5
       height: 5
       resolution: 0.05
-      robot_radius: 0.35
+      robot_radius: 0.30
       plugins: ["static_layer", "intensity_voxel_layer", "inflation_layer"]
       intensity_voxel_layer:
         plugin: nav2_costmap_2d_plugins::IntensityVoxelLayer
