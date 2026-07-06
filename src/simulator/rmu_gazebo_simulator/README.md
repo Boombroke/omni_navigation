@@ -132,11 +132,11 @@ ros2 launch sentry_nav_bringup rm_multi_navigation_simulation_launch.py
 
 1. 新增 `<physics name="sim" type="dart">` 块，`max_step_size=0.001`（缩小步长，稳定 LCP 迭代）。
 2. 新增解析地平面模型 `flat_ground`（`<plane>` 法向 `(0,0,1)`，尺寸 100×100m），摩擦 `mu=mu2=0.9`——平面-圆柱接触精确稳定，作主接触面；原 STL 保留（提供墙/坡碰撞与感知），不影响 costmap。
-3. 机器人 spawn z 降至 **0.05**（原 0.3），减少落地冲击。
+3. 机器人 spawn 置于红方基地 `(-11.3, 1.3)`、z=**0.5**。关键:整场 STL 地面 floor z≥0.228(红方基地平台 ≈0.43m),spawn z 必须高于当地地形面,否则底盘陷入 STL 下方(表现为"卡在地下");`flat_ground`(z=0)仅是物理稳定接触面,非落点基准。(注:8813da8 曾试过中场 `(0,8)`+z=0.05,会卡地下,已修正回基地。)
 
 **轮摩擦说明**：车轮 `mu=0.9` 定义在 `chassis_wheel.def.xmacro`（生效文件）。`rmua19_standard_robot/model.sdf` 中的 `mu=0.2` 是 xmacro 自动生成的死文件，**不生效，无需修改**。
 
-**验证**：无头运行约 92s，GT roll≈-1°，z≈0.05，稳定不爆炸。
+**验证**：headless 无头实测,gz 模型位姿在基地 `(-11.3, 1.3)` 稳定落地 z≈**0.503**、RPY≈0(≈基地平台 0.428 + 轮半径 0.076,四轮平稳接触),Nav2 全激活、SmacPlanner2D 从基地成功出路径、无 `Start occupied`。
 
 ---
 

@@ -20,9 +20,9 @@ robots:
   rmuc_2026:
     - name: "red_standard_robot1"
       color: "red"
-      x_pose: "0.0"
-      y_pose: "8.0"
-      z_pose: "0.05"
+      x_pose: "-11.3"
+      y_pose: "1.3"
+      z_pose: "0.5"
       yaw: "0.0"
 
     # NOTE: Blue robot disabled to improve Gazebo RTF (halves sensor rendering load).
