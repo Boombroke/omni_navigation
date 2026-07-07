@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  仿真专用: 复制自 navigate_to_pose_w_replanning_and_recovery.xml, 唯一差别是
+  ComputePathToPose 的 RateController hz 5.0 -> 1.5 (全局重规划 5Hz->1.5Hz)。
+  原因: 仿真里 SmacPlanner2D 每次(降采样)重规划路径略有抖动 + MPPI 每次要对齐
+  新路径, 5Hz 换线导致视觉"频繁换线"且加剧运动不丝滑; 降到 1.5Hz 更柔。
+  实车不受影响 (config/reality/nav2_params.yaml 仍指向原 5Hz 版本)。
+  其余(裁剪版恢复: 只保留 ClearAndWait, 删 BackUp)与原版一致, 见原文件注释。
+-->
+<root BTCPP_format="3"
+      main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode name="NavigateRecovery"
+                  number_of_retries="10">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.5">
+          <RecoveryNode name="ComputePathToPose"
+                        number_of_retries="3">
+            <ComputePathToPose goal="{goal}"
+                               path="{path}"
+                               planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context"
+                                service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode name="FollowPath"
+                      number_of_retries="3">
+          <FollowPath path="{path}"
+                      controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context"
+                              service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <Sequence name="ClearAndWait">
+          <ClearEntireCostmap name="ClearLocalCostmap-Subtree"
+                              service_name="local_costmap/clear_entirely_local_costmap"/>
+          <ClearEntireCostmap name="ClearGlobalCostmap-Subtree"
+                              service_name="global_costmap/clear_entirely_global_costmap"/>
+          <Wait wait_duration="0.5"/>
+        </Sequence>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>
