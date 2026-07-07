@@ -416,7 +416,7 @@ controller_server:
       temperature: 0.3
       gamma: 0.015
       motion_model: "Omni"              # 关键: 全向模型, 采样 vy
-      visualize: false
+      visualize: true
       regenerate_noises: false
       TrajectoryVisualizer:
         trajectory_step: 5
