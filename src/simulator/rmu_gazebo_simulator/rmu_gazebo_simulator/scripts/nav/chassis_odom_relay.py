@@ -7,10 +7,11 @@
 #   - TF odom -> base_footprint (2D 约束; spawn 相对, 使 odom 原点=出生点, 与 Point-LIO 约定一致)
 #   - odometry        (odom -> robot_base_frame; 供 fake_vel_transform/velocity_smoother)
 #   - chassis_odometry(odom -> base_frame; twist 线速度在 odom 惯性轴, 供 MPPI 速度反馈)
-#   - registered_scan / lidar_odometry (透传 Point-LIO cloud_registered): terrain 感知链路必需,
-#     否则 pointcloud_to_laserscan 无输入 -> slam_toolbox 无 /map -> costmap static_layer 阻塞
-#     ("no map received") -> planner 无有效代价图 -> 不发 cmd_vel。定位用 GT (干净), 感知仍走
-#     sim 雷达 (sim Point-LIO 位姿噪声只轻微影响 terrain 标记, 已被 min_obstacle_intensity 抑制)。
+#   - registered_scan / lidar_odometry: terrain 感知链路必需 (否则 p2l 无输入 -> slam 无 /map ->
+#     costmap static_layer 阻塞)。registered_scan 由原始 sim 雷达 (velodyne_points, sensor 系)
+#     经 GT 的 odom<-sensor TF 真变换到 odom 得到 -> 与 GT 机器人位姿严格一致, 免疫 Point-LIO 漂移
+#     (旧实现仅改标 Point-LIO camera_init 云的 frame_id 为 odom 不变换坐标, 运动后随 Point-LIO
+#     漂移偏离 GT, 使 RViz 点云与机器人/地图错位)。
 #
 # 关键: chassis_odometry_gt 的 pose 为 Gazebo 世界系绝对值 (原点在世界原点, 非出生点),
 # twist 线速度在世界系。本节点以首帧为 init, 输出 init^-1 * gt (spawn 相对), 并把 twist
@@ -18,13 +19,19 @@
 
 import math
 
+import numpy as np
 import rclpy
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import PointCloud2
-from tf2_ros import TransformBroadcaster
+from rclpy.time import Time
+from sensor_msgs.msg import PointCloud2, PointField
+from sensor_msgs_py import point_cloud2
+from tf2_ros import TransformBroadcaster, TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 
 
 def yaw_from_quat(z: float, w: float) -> float:
@@ -45,8 +52,8 @@ class ChassisOdomRelay(Node):
         self.gt_topic = self.declare_parameter(
             "gt_odom_topic", "chassis_odometry_gt"
         ).value
-        self.registered_scan_topic = self.declare_parameter(
-            "registered_scan_topic", "cloud_registered"
+        self.raw_scan_topic = self.declare_parameter(
+            "raw_scan_topic", "velodyne_points"
         ).value
         publish_rate = self.declare_parameter("publish_rate_hz", 100.0).value
 
@@ -60,6 +67,8 @@ class ChassisOdomRelay(Node):
         self._last_gt = None
 
         self.tf_broadcaster = TransformBroadcaster(self)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
         self.odometry_pub = self.create_publisher(Odometry, "odometry", 2)
         self.chassis_odometry_pub = self.create_publisher(
             Odometry, "chassis_odometry", 2
@@ -74,7 +83,7 @@ class ChassisOdomRelay(Node):
         )
         self.create_subscription(
             PointCloud2,
-            self.registered_scan_topic,
+            self.raw_scan_topic,
             self._scan_cb,
             qos_profile_sensor_data,
         )
@@ -168,14 +177,62 @@ class ChassisOdomRelay(Node):
         odom.twist.twist.angular.z = wz
         self.odometry_pub.publish(odom)
 
+    @staticmethod
+    def _quat_to_rot(x: float, y: float, z: float, w: float) -> np.ndarray:
+        # 单位四元数 -> 3x3 旋转矩阵 (点云批量旋转用)
+        return np.array(
+            [
+                [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+            ]
+        )
+
     def _scan_cb(self, msg: PointCloud2):
-        # 透传 Point-LIO 已配准点云为 registered_scan (odom 系, 供 terrain_analysis);
-        # 同步发 lidar_odometry (odom -> lidar_frame, 供 terrain_analysis_ext)。
-        # 点云已在 odom 原点系, 但源 frame_id 为孤儿 (camera_init), 未接入命名空间化 TF 树 ->
-        # pointcloud_to_laserscan/terrain 变换失败 -> slam 偶发缺 scan, RViz 地图错位。
-        # 显式改回 odom_frame (与 odom_bridge 契约一致), 使点云 frame 落在有效 TF 树上。
+        # 用 GT 定位把原始仿真雷达点云 (sensor 系) 真变换到 odom 系发 registered_scan:
+        # odom<-base 由本中继按 GT 广播, base<-sensor 是 URDF 静态外参, 故 tf 查得的 odom<-sensor
+        # 完全由 GT 决定 -> 感知点云严格贴合 GT 机器人位姿, 免疫 sim Point-LIO 漂移。
+        try:
+            tf = self.tf_buffer.lookup_transform(
+                self.odom_frame, msg.header.frame_id, msg.header.stamp,
+                Duration(seconds=0.05),
+            )
+        except TransformException:
+            try:
+                tf = self.tf_buffer.lookup_transform(
+                    self.odom_frame, msg.header.frame_id, Time()
+                )
+            except TransformException:
+                return
+
+        pts = point_cloud2.read_points_numpy(
+            msg, field_names=("x", "y", "z", "intensity"), skip_nans=True
+        )
+        pts = pts[np.isfinite(pts[:, :3]).all(axis=1)]
+        if pts.shape[0] == 0:
+            return
+        tr = tf.transform.translation
+        q = tf.transform.rotation
+        rot = self._quat_to_rot(q.x, q.y, q.z, q.w)
+        xyz = pts[:, :3].astype(np.float64) @ rot.T + np.array([tr.x, tr.y, tr.z])
+
+        cloud = np.zeros(
+            xyz.shape[0],
+            dtype=[("x", "f4"), ("y", "f4"), ("z", "f4"), ("intensity", "f4")],
+        )
+        cloud["x"] = xyz[:, 0]
+        cloud["y"] = xyz[:, 1]
+        cloud["z"] = xyz[:, 2]
+        cloud["intensity"] = pts[:, 3]
+        fields = [
+            PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
+            PointField(name="intensity", offset=12, datatype=PointField.FLOAT32, count=1),
+        ]
         msg.header.frame_id = self.odom_frame
-        self.registered_scan_pub.publish(msg)
+        self.registered_scan_pub.publish(point_cloud2.create_cloud(msg.header, fields, cloud))
+
         if not self._have_init or self._last_gt is None:
             return
         rel_x, rel_y, rel_yaw = self._rel_pose(self._last_gt)

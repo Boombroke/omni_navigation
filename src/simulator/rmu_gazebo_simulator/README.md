@@ -88,7 +88,7 @@ ros2 launch sentry_nav_bringup rm_multi_navigation_simulation_launch.py
 3. 广播 `odom→base_footprint` TF（替代 `odom_bridge`）。
 4. 发布 `odometry`（`odom→gimbal_yaw` 系，供 `fake_vel_transform` 读姿态）。
 5. 发布 `chassis_odometry`（`odom` 系，`child=base_footprint`，twist 线速度在惯性轴，供 MPPI 速度反馈）。
-6. 透传 `cloud_registered` → `registered_scan` + `lidar_odometry`（`terrain_analysis`/`terrain_analysis_ext` 链路必需；无此透传则 slam 无 `/map` → `static_layer` 阻塞）。
+6. 发布 `registered_scan` + `lidar_odometry`（`terrain_analysis`/`terrain_analysis_ext` 链路必需；无则 slam 无 `/map` → `static_layer` 阻塞）。`registered_scan` 由**原始仿真雷达 `velodyne_points`（sensor 系）经 GT 的 `odom→sensor` TF 真变换到 odom** 得到，与 GT 机器人位姿严格一致、免疫 sim Point-LIO 漂移（旧实现仅把 Point-LIO `cloud_registered` 的 `camera_init` 帧改标为 odom、不变换坐标，机器人运动后点云随 Point-LIO 漂移偏离 GT，导致 RViz 点云与机器人/地图错位）。
 
 **与 odom_bridge 的关系**：
 

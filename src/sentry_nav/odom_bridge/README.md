@@ -74,7 +74,7 @@ Point-LIO
 | `odom→base_footprint` TF | Point-LIO 位姿推算 | Gazebo GT（`chassis_odometry_gt`） |
 | `odometry` | Point-LIO 差分 | GT 转换 |
 | `chassis_odometry` | Point-LIO 差分（惯性轴） | GT 转换（惯性轴，供 MPPI） |
-| `registered_scan` / `lidar_odometry` | odom_bridge 发布 | chassis_odom_relay 透传 |
+| `registered_scan` / `lidar_odometry` | odom_bridge 发布 | chassis_odom_relay 按 GT `odom→sensor` 变换原始 `velodyne_points` |
 
 **切换原因**：仿真 Point-LIO 位姿抖动约 8mm/帧，静止时 `chassis_odometry` 出现 ±0.1m/s 幽灵速度，导致 MPPI 速度反馈失真（过保守或触发 `Optimizer fail`）。Gazebo GT 真值（1000Hz，精确无噪声）消除该问题，实现仿真自主导航零 `Optimizer fail`。
 
