@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <mutex>
+#include <chrono>
 #include <gz/common/Util.hh>
 #include <gz/common/Profiler.hh>
 #include <gz/plugin/Register.hh>
@@ -77,6 +78,12 @@ public:
     gz::math::PID xPid;
     gz::math::PID yPid;
     gz::math::PID wPid;
+    // 电机速度环带宽等效: 对 IK 轮速做一阶低通, 模拟真实电机把上层 30Hz 阶跃速度指令
+    // 磨成有限 jerk 的斜坡。sim 的 JointVelocityCmd 是无带宽运动学伺服, 缺此环节则阶跃
+    // 直传轮速 -> 运动 jerky; 补上它使 sim 执行器逼近实车电机动力学 (非控制器改动)。
+    double motorTau = 0.06;
+    double wheelCmdFilt[WHEEL_NUM] = {0.0, 0.0, 0.0, 0.0};
+    bool filtInit = false;
     //for Odometry
     bool initFlag = false;
     std::string odomFrameId;
@@ -138,6 +145,8 @@ void MecanumDrive2::Configure(const Entity &_entity,
     this->dataPtr->xPid.Init(100, 0, 0, 0, 0, 100, -100, 0);
     this->dataPtr->yPid.Init(500, 0, 0, 0, 0, 200, -200, 0);
     this->dataPtr->wPid.Init(200, 0, 0, 0, 0, 100, -100, 0);
+    // 电机速度环时间常数 (s), 对齐真实电机带宽; SDF 可覆盖, 缺省 0.06
+    this->dataPtr->motorTau = _sdf->Get<double>("motor_time_constant", 0.06).first;
 }
 
 void MecanumDrive2::PreUpdate(const gz::sim::UpdateInfo &_info,
@@ -181,16 +190,35 @@ void MecanumDrive2::PreUpdate(const gz::sim::UpdateInfo &_info,
     wheelSpeed[MecanumDrive2Private::FRONT_RIGHT] = (vx + vy + k * wz) / r;
     wheelSpeed[MecanumDrive2Private::REAR_LEFT] = (vx + vy - k * wz) / r;
     wheelSpeed[MecanumDrive2Private::REAR_RIGHT] = (vx - vy + k * wz) / r;
+    // 每轮一阶低通 (τ=motorTau): 模拟电机速度环带宽, 把阶跃指令磨成有限 jerk 的斜坡。
+    // dt==0 (暂停/首帧) 时跳过, 避免除零与状态冻结; 首次用原值初始化滤波器。
+    const double dt = std::chrono::duration<double>(_info.dt).count();
+    if (dt > 1e-9)
+    {
+        const double alpha = dt / (this->dataPtr->motorTau + dt);
+        for (int i = 0; i < WHEEL_NUM; i++)
+        {
+            if (!this->dataPtr->filtInit)
+            {
+                this->dataPtr->wheelCmdFilt[i] = wheelSpeed[i];
+            }
+            else
+            {
+                this->dataPtr->wheelCmdFilt[i] += alpha * (wheelSpeed[i] - this->dataPtr->wheelCmdFilt[i]);
+            }
+        }
+        this->dataPtr->filtInit = true;
+    }
     for (int i = 0; i < WHEEL_NUM; i++)
     {
         auto vel = _ecm.Component<components::JointVelocityCmd>(this->dataPtr->wheelJoints[i]);
         if (vel == nullptr)
         {
-            _ecm.CreateComponent(this->dataPtr->wheelJoints[i], components::JointVelocityCmd({wheelSpeed[i]}));
+            _ecm.CreateComponent(this->dataPtr->wheelJoints[i], components::JointVelocityCmd({this->dataPtr->wheelCmdFilt[i]}));
         }
         else
         {
-            *vel = components::JointVelocityCmd({wheelSpeed[i]});
+            *vel = components::JointVelocityCmd({this->dataPtr->wheelCmdFilt[i]});
         }
     }
 }
