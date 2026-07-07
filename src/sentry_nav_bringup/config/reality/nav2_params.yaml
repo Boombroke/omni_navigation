@@ -185,18 +185,19 @@ small_gicp_relocalization:
     lidar_frame: "front_mid360"
     init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # [x, y, z, roll, pitch, yaw]
     max_iterations: 50
-    accumulated_count_threshold: 20
+    accumulated_count_threshold: 50
     min_range: 0.5
     min_inlier_ratio: 0.3
-    max_fitness_error: 1.0
+    max_fitness_error: 0.3                               # 适度放宽：0.1 过紧会误拒正确回环匹配
+    quality_convergence_threshold: 0.025                # 允许未形式收敛但实际正确的 GICP 结果通过（bag1627值）
     enable_periodic_relocalization: true
-    relocalization_interval: 2.0                        # 5→2s：长距离局（083419 类）更密纠偏
-    max_correction_distance: 8.0                        # 5→8m：漂移>5m 时 periodic 不再被拒（根因）
-    emergency_max_dist_sq: 64.0                           # 25→64：emergency 关联半径 5m→8m
-    emergency_max_correction_distance: 8.0
-    emergency_consecutive_failures: 2                     # 3→2：约 4s 触发 emergency
-    emergency_min_score_threshold: 150000.0
-    terrain_clearing_threshold: 0.1
+    relocalization_interval: 5.0                        # 更密纠偏（回环后更快响应）
+    max_correction_distance: 5.0                        # 回环漂移通常 1-3m，0.5m 会导致全部被拒
+    emergency_max_dist_sq: 64.0                         # 8m 搜索半径
+    emergency_max_correction_distance: 5.0              # 对齐 periodic 的 5m 上限
+    emergency_consecutive_failures: 3                   # ~15s 触发 emergency
+    emergency_min_score_threshold: 200000.0             # 适度放宽 emergency 准入门槛
+    terrain_clearing_threshold: 0.3                     # 0.5m 以上修正清代价地图
     enable_deep_verification: true                        # 长局兜底；CPU 吃紧可改 false
     deep_verification_interval: 30.0
     deep_accumulated_count_threshold: 100
@@ -209,9 +210,12 @@ small_gicp_relocalization:
     deep_max_correction_distance: 15.0
     deep_min_score_threshold: 500000.0
     health_window_size: 5
-    health_unhealthy_score_threshold: 50000.0
+    health_unhealthy_score_threshold: 100000.0             # 降低 health 敏感度，避免误触发 SC
     health_stale_timeout_sec: 30.0
-    enable_global_relocalization: false                 # 仍关 SC 冷启动；漂移靠 periodic+emergency+deep
+    enable_global_relocalization: true                 # SC 冷启动全局重定位（单候选）
+    global_min_score_threshold: 50000.0                # SC 匹配 50k 门槛（500inlier+0.05fit≈9800，可达）
+    global_max_correction_distance: 3.0                # SC 修正 3m 硬限
+    global_relocalization_min_interval_sec: 60.0       # SC 60s 冷却
     # The prior_pcd_file does not need to be specified since it going to be set by defaults in launch.
     # prior_pcd_file: ""
 

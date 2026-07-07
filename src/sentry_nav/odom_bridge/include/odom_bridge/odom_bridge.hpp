@@ -71,6 +71,19 @@ private:
   bool has_previous_transform_;
   tf2::Transform previous_transform_;
   std::chrono::steady_clock::time_point previous_time_;
+
+  // EMA smoothing for odom->base TF (eliminates Point-LIO micro-jitter in RViz)
+  double smoothing_alpha_;
+  bool smoothing_initialized_;
+  tf2::Transform filtered_transform_;
+  double filtered_yaw_;
+
+  // EMA smoothing for odometry twist (suppresses finite-difference velocity noise)
+  double velocity_smoothing_alpha_;
+  bool velocity_smoothing_initialized_;
+  double filtered_linear_vel_x_;
+  double filtered_linear_vel_y_;
+  double filtered_angular_vel_z_;
 };
 
 }

@@ -97,6 +97,7 @@ def generate_launch_description():
             "use_rviz": use_rviz,
             "use_foxglove": use_foxglove,
             "use_robot_state_pub": "True",
+            "use_serial_driver": "False",
         }.items(),
     )
 

@@ -356,8 +356,6 @@ void SmallGicpRelocalizationNode::registeredPcdCallback(
   current_scan_frame_id_ = msg->header.frame_id;
 
   if (manual_pose_locked_.load()) {
-    // Manual lock: stop accumulating points. publishTransform still runs
-    // off result_t_ which is the manual pose.
     return;
   }
 
@@ -365,8 +363,40 @@ void SmallGicpRelocalizationNode::registeredPcdCallback(
     return;
   }
 
-  if (has_localized_ && !enable_periodic_relocalization_) {
+  if (cold_start_running_.load()) {
     return;
+  }
+
+  if (has_localized_.load() && !enable_periodic_relocalization_) {
+    return;
+  }
+
+  // Deferred timer setup — the cold-start background thread sets
+  // has_localized_ but cannot create timers off the executor thread.
+  if (has_localized_.load() && !periodic_timer_ && enable_periodic_relocalization_) {
+    periodic_timer_ = this->create_wall_timer(
+      std::chrono::milliseconds(static_cast<int>(relocalization_interval_ * 1000.0)),
+      std::bind(&SmallGicpRelocalizationNode::periodicRegistrationCallback, this));
+    RCLCPP_INFO(
+      this->get_logger(), "Periodic relocalization enabled at %.1fs interval.",
+      relocalization_interval_);
+
+    if (enable_deep_verification_ && deep_timer_) {
+      {
+        std::lock_guard<std::mutex> lock(deep_cloud_mutex_);
+        deep_accumulated_cloud_->clear();
+        deep_accumulated_count_ = 0;
+      }
+      deep_timer_->cancel();
+      deep_timer_ = this->create_wall_timer(
+        std::chrono::milliseconds(10000),
+        std::bind(&SmallGicpRelocalizationNode::deepVerificationTimerCallback, this));
+      RCLCPP_INFO(
+        this->get_logger(),
+        "Deep verification: fast warm-up in 10.0s (yaw refinement), "
+        "then every %.1fs.",
+        deep_verification_interval_);
+    }
   }
 
   pcl::PointCloud<pcl::PointXYZ>::Ptr scan(new pcl::PointCloud<pcl::PointXYZ>());
@@ -402,28 +432,26 @@ void SmallGicpRelocalizationNode::registeredPcdCallback(
     deep_accumulated_count_++;
   }
 
-  if (!has_localized_ && accumulated_count_ >= accumulated_count_threshold_) {
+  if (!has_localized_.load() && accumulated_count_ >= accumulated_count_threshold_) {
     RCLCPP_INFO(
       this->get_logger(), "Accumulated %d frames (%zu points), performing initial registration...",
       accumulated_count_, accumulated_cloud_->size());
 
-    bool sc_success = false;
+    pcl::PointCloud<pcl::PointXYZ>::Ptr snapshot;
+    {
+      std::lock_guard<std::mutex> lock(cloud_mutex_);
+      snapshot = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(*accumulated_cloud_);
+    }
 
-    // 冷启动优先走 Scan Context 全局重定位（如果 .scdb 已加载）。
-    // SC 不依赖 init_pose / LIO 重力收敛 yaw，能在机器人离 PCD 建图原点 1m+ 时给出
-    // 准确初值，避免 GICP 从 identity + 3m 关联半径起跑锁次优局部最小。
+    Eigen::Vector3d robot_in_odom = Eigen::Vector3d::Zero();
+    bool tf_ok = false;
     if (global_relocalization_ready_) {
-      RCLCPP_INFO(
-        this->get_logger(),
-        "Cold start: trying Scan Context global relocalization first "
-        "(does not depend on init_pose / LIO orientation)");
-      Eigen::Vector3d robot_in_odom;
-      bool tf_ok = false;
       try {
         auto tf_stamped = tf_buffer_->lookupTransform(
           odom_frame_, robot_base_frame_, tf2::TimePointZero,
           tf2::durationFromSec(0.5));
-        robot_in_odom << tf_stamped.transform.translation.x, tf_stamped.transform.translation.y,
+        robot_in_odom << tf_stamped.transform.translation.x,
+          tf_stamped.transform.translation.y,
           tf_stamped.transform.translation.z;
         tf_ok = true;
       } catch (const tf2::TransformException & ex) {
@@ -432,61 +460,54 @@ void SmallGicpRelocalizationNode::registeredPcdCallback(
           "Cold start SC: TF lookup %s->%s failed: %s. Falling back to GICP-only.",
           odom_frame_.c_str(), robot_base_frame_.c_str(), ex.what());
       }
-      if (tf_ok) {
-        // 深拷贝 snapshot，不影响后续 GICP 精调用 accumulated_cloud_ 本体
-        pcl::PointCloud<pcl::PointXYZ>::Ptr snapshot;
-        {
-          std::lock_guard<std::mutex> lock(cloud_mutex_);
-          snapshot = std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(*accumulated_cloud_);
-        }
-        // 同步调用（不 detach）：节点冷启动期间 publishTransform 50ms 一次发的
-        // result_t_ 还是 identity，SC 跑慢点没关系；失败也只是降级到 GICP-only。
+    }
+
+    cold_start_running_.store(true);
+
+    std::thread([this, snapshot, robot_in_odom, tf_ok]() {
+      bool sc_success = false;
+
+      if (global_relocalization_ready_ && tf_ok) {
+        RCLCPP_INFO(this->get_logger(), "Cold start: trying Scan Context global relocalization first.");
         sc_success = runGlobalRelocalization(snapshot, robot_in_odom);
         if (sc_success) {
-          RCLCPP_WARN(
-            this->get_logger(),
-            "Cold start SC SUCCEEDED. Refining with GICP from SC initial guess.");
+          RCLCPP_WARN(this->get_logger(), "Cold start SC SUCCEEDED. result_t_ already set, skipping GICP re-refine.");
         } else {
-          RCLCPP_WARN(
-            this->get_logger(),
-            "Cold start SC failed. Falling back to identity-init GICP.");
+          RCLCPP_WARN(this->get_logger(), "Cold start SC failed. Falling back to identity-init GICP.");
         }
+      } else if (!global_relocalization_ready_) {
+        RCLCPP_INFO(this->get_logger(), "Cold start: .scdb not loaded, using identity-init GICP.");
       }
-    } else {
-      RCLCPP_INFO(
-        this->get_logger(),
-        "Cold start: .scdb not loaded, using identity-init GICP "
-        "(may fail if start position differs from mapping origin).");
-    }
 
-    // performRegistration 用 previous_result_t_ 当 GICP 初值：
-    //   - SC 成功：previous_result_t_ 已是 SC 结果（runGlobalRelocalization 写好），
-    //              GICP 在准确初值上 3m 半径精调，必收敛到厘米级
-    //   - SC 失败：previous_result_t_ 仍是 init_pose（identity），GICP 自己起跑（旧行为）
-    bool success = performRegistration(false);
-    if (success) {
-      has_localized_ = true;
-      RCLCPP_INFO(
-        this->get_logger(), "Initial localization succeeded%s.",
-        sc_success ? " (SC + GICP refine)" : " (GICP only)");
-
-      if (enable_periodic_relocalization_) {
-        periodic_timer_ = this->create_wall_timer(
-          std::chrono::milliseconds(static_cast<int>(relocalization_interval_ * 1000.0)),
-          std::bind(&SmallGicpRelocalizationNode::periodicRegistrationCallback, this));
-        RCLCPP_INFO(
-          this->get_logger(), "Periodic relocalization enabled at %.1fs interval.",
-          relocalization_interval_);
+      bool success = sc_success;
+      if (!sc_success) {
+        // SC didn't give us a pose — run full GICP from identity (old behavior).
+        success = performRegistration(false);
       }
-    } else {
-      RCLCPP_WARN(
-        this->get_logger(),
-        "Initial registration failed quality check. Will retry with more frames...");
-    }
+      // When SC succeeded, result_t_ / previous_result_t_ are already committed
+      // by runGlobalRelocalization; running another GICP pass from that pose
+      // can only make it worse when the accumulated cloud has limited geometric
+      // diversity (stationary cold start).
 
-    std::lock_guard<std::mutex> lock(cloud_mutex_);
-    accumulated_cloud_->clear();
-    accumulated_count_ = 0;
+      if (success) {
+        has_localized_.store(true);
+        RCLCPP_INFO(this->get_logger(), "Initial localization succeeded%s.",
+                    sc_success ? " (SC)" : " (GICP only)");
+      } else {
+        RCLCPP_WARN(this->get_logger(),
+                    "Initial registration failed. Will retry with more frames...");
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(cloud_mutex_);
+        accumulated_cloud_->clear();
+        accumulated_count_ = 0;
+      }
+
+      cold_start_running_.store(false);
+    }).detach();
+
+    return;
   }
 }
 
@@ -821,15 +842,19 @@ bool SmallGicpRelocalizationNode::performRegistration(bool is_periodic)
   double fitness_error = 0.0;
   if (result.num_inliers > 0) {
     fitness_error = result.error / static_cast<double>(result.num_inliers);
+    // Cold start (non-periodic) uses a looser fitness threshold because the
+    // SC initial guess has already provided a strong prior.  Periodic
+    // relocalization keeps the tight threshold to reject false corrections.
+    double effective_max_fitness = is_periodic ? max_fitness_error_ : (max_fitness_error_ * 3.0);
     RCLCPP_INFO(
-      this->get_logger(), "GICP fitness_error=%.6f (threshold=%.6f)", fitness_error,
-      max_fitness_error_);
+      this->get_logger(), "GICP fitness_error=%.6f (threshold=%.6f, %s)",
+      fitness_error, effective_max_fitness, is_periodic ? "periodic" : "cold-start");
 
-    if (fitness_error > max_fitness_error_) {
+    if (fitness_error > effective_max_fitness) {
       RCLCPP_WARN(
         this->get_logger(),
-        "GICP quality check FAILED: fitness_error=%.6f > max_fitness_error=%.6f", fitness_error,
-        max_fitness_error_);
+        "GICP quality check FAILED: fitness_error=%.6f > max_fitness_error=%.6f (%s)",
+        fitness_error, effective_max_fitness, is_periodic ? "periodic" : "cold-start");
       if (health_monitor_) {
         health_monitor_->recordFailure();
       }
@@ -976,7 +1001,7 @@ void SmallGicpRelocalizationNode::initialPoseCallback(
 
   // Atomically commit
   previous_result_t_ = result_t_ = constrained;
-  has_localized_ = true;
+  has_localized_.store(true);
   consecutive_periodic_failures_ = 0;
   manual_pose_locked_.store(true);
 
@@ -1012,7 +1037,7 @@ void SmallGicpRelocalizationNode::deepVerificationTimerCallback()
   if (!global_map_ready_ || !target_deep_ || !target_deep_tree_) {
     return;
   }
-  if (!has_localized_) {
+  if (!has_localized_.load()) {
     return;
   }
   if (deep_running_.load()) {
@@ -1227,7 +1252,7 @@ bool SmallGicpRelocalizationNode::checkAndTriggerGlobalRelocalization()
   if (manual_pose_locked_.load()) {
     return false;
   }
-  if (!global_relocalization_ready_ || !has_localized_) {
+  if (!global_relocalization_ready_ || !has_localized_.load()) {
     return false;
   }
   if (!health_monitor_ || !health_monitor_->isUnhealthy()) {
@@ -1387,25 +1412,17 @@ bool SmallGicpRelocalizationNode::runGlobalRelocalization(
   reg->rejector.max_dist_sq = global_max_dist_sq_;
   reg->optimizer.max_iterations = global_max_iterations_;
 
+  // Only verify the SINGLE best SC match with GICP.
+  // Strategy: if the most similar descriptor does not pass GICP quality
+  // gates, fall back to identity-seeded GICP.  Worse SC candidates are
+  // MORE likely to be false positives (perception aliasing), and checking
+  // them caused cold-start fly-aways in self-similar environments.
   double best_score = -1.0;
   Eigen::Isometry3d best_T = Eigen::Isometry3d::Identity();
-  for (size_t k = 0; k < candidates.size(); ++k) {
-    const auto & c = candidates[k];
+  {
+    const auto & c = candidates[0];
     const Eigen::Vector3d & db_pose = sc_db_->poses[c.db_idx];
-    // GICP 初值 = T_map_odom：把 source（odom 系）平移到 target（map 系）的初始猜测。
-    //
-    // 推导（已通过 /tmp/global_reloc_smoke 闭环验证）：
-    //   query_local 朝向 = odom 朝向；candidate_local 朝向 = map 朝向（codegen yaw=0）。
-    //   ScanContextEngine::distance 返回 yaw_shift 满足 query = R_z(yaw_shift) * candidate
-    //   （点级关系）。这等价于"query frame 相对 candidate frame 顺时针旋转 yaw_shift"，
-    //   而 candidate frame ≡ map frame、query frame ≡ odom frame，所以
-    //     R_map_odom = R_z(-yaw_shift)
-    //   因此 GICP 初值的 yaw 是 -yaw_shift（不是 +yaw_shift）。
-    //
-    //   T_map_robot = [R_map_odom | db_pose]
-    //   T_odom_robot = [I | robot_in_odom]
-    //   T_map_odom = T_map_robot * T_odom_robot^{-1}
-    //              = [R_map_odom | db_pose - R_map_odom * robot_in_odom]
+
     Eigen::Matrix3d R_map_odom =
       Eigen::AngleAxisd(-c.yaw_shift, Eigen::Vector3d::UnitZ()).toRotationMatrix();
     Eigen::Vector3d trans = db_pose - R_map_odom * robot_in_odom;
@@ -1414,18 +1431,87 @@ bool SmallGicpRelocalizationNode::runGlobalRelocalization(
     guess.linear() = R_map_odom;
 
     auto result = reg->align(*target_, *source, *target_tree_, guess);
-    if (!result.converged || result.num_inliers < 50) {
-      continue;
-    }
-    double inlier_ratio = static_cast<double>(result.num_inliers) / source->size();
-    double fitness = result.error / static_cast<double>(result.num_inliers);
-    double score = static_cast<double>(result.num_inliers) / (fitness + 0.001);
-    RCLCPP_INFO(
-      this->get_logger(), "Global candidate %zu: inliers=%zu (%.3f), fitness=%.6f, score=%.0f", k,
-      result.num_inliers, inlier_ratio, fitness, score);
-    if (score > best_score) {
+    if (result.converged && result.num_inliers >= 50) {
+      double inlier_ratio = static_cast<double>(result.num_inliers) / source->size();
+      double fitness = result.error / static_cast<double>(result.num_inliers);
+      double score = static_cast<double>(result.num_inliers) / (fitness + 0.001);
+      RCLCPP_INFO(
+        this->get_logger(),
+        "Global candidate 0 (best SC): db_idx=%zu, sc_dist=%.4f, "
+        "inliers=%zu (%.3f), fitness=%.6f, score=%.0f",
+        c.db_idx, c.sc_dist, result.num_inliers, inlier_ratio, fitness, score);
       best_score = score;
       best_T = result.T_target_source;
+    } else {
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Global candidate 0 (best SC, db_idx=%zu, sc_dist=%.4f) failed GICP: "
+        "converged=%d, inliers=%zu. Falling back to identity-init GICP.",
+        c.db_idx, c.sc_dist, result.converged, result.num_inliers);
+    }
+  }
+
+  // Yaw sweep refinement — SC sector quantization (±3° for 60 sectors) can
+  // leave residual yaw error.  Sweep ±5° in 0.5° steps with a tight
+  // correspondence radius (2 m).  We operate on a DEFENSIVE COPY of source
+  // because small_gicp::align mutates the source cloud, and we must not
+  // corrupt the cloud that periodic/emergency GICP will later use.
+  if (best_score > 0) {
+    try {
+      auto sweep_source = std::make_shared<pcl::PointCloud<pcl::PointCovariance>>(*source);
+      auto sweep_tree = std::make_shared<
+        small_gicp::KdTree<pcl::PointCloud<pcl::PointCovariance>>>(sweep_source,
+        small_gicp::KdTreeBuilderOMP(num_threads_));
+
+      const double base_yaw = std::atan2(best_T.rotation()(1, 0), best_T.rotation()(0, 0));
+      constexpr double kSweepDeg = 5.0;
+      constexpr double kStepDeg = 0.5;
+      constexpr double kTightMaxDistSq = 4.0;  // 2 m
+
+      auto fine_reg = std::make_shared<
+        small_gicp::Registration<small_gicp::GICPFactor, small_gicp::ParallelReductionOMP>>();
+      fine_reg->reduction.num_threads = num_threads_;
+      fine_reg->rejector.max_dist_sq = kTightMaxDistSq;
+      fine_reg->optimizer.max_iterations = 10;
+
+      double best_sweep_score = best_score;
+      double best_sweep_yaw = base_yaw;
+      Eigen::Isometry3d best_sweep_T = best_T;
+
+      for (double d = -kSweepDeg; d <= kSweepDeg + 0.001; d += kStepDeg) {
+        double test_yaw = base_yaw + d * M_PI / 180.0;
+        Eigen::Isometry3d guess = Eigen::Isometry3d::Identity();
+        guess.translation() = best_T.translation();
+        guess.linear() = Eigen::AngleAxisd(test_yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+
+        auto res = fine_reg->align(*target_, *sweep_source, *target_tree_, guess);
+        if (res.converged && res.num_inliers >= 50) {
+          double fitness = res.error / static_cast<double>(res.num_inliers);
+          double score = static_cast<double>(res.num_inliers) / (fitness + 0.001);
+          if (score > best_sweep_score) {
+            best_sweep_score = score;
+            best_sweep_yaw = std::atan2(res.T_target_source.rotation()(1, 0),
+                                        res.T_target_source.rotation()(0, 0));
+            best_sweep_T = res.T_target_source;
+          }
+        }
+      }
+
+      if (best_sweep_score > best_score) {
+        RCLCPP_INFO(
+          this->get_logger(),
+          "Global yaw sweep: %.2f° -> %.2f° (score %.0f -> %.0f)",
+          base_yaw * 180.0 / M_PI, best_sweep_yaw * 180.0 / M_PI,
+          best_score, best_sweep_score);
+        best_score = best_sweep_score;
+        best_T = best_sweep_T;
+      }
+    } catch (const std::exception & e) {
+      RCLCPP_ERROR(this->get_logger(),
+        "Global yaw sweep exception: %s. Keeping original SC+GICP yaw.", e.what());
+    } catch (...) {
+      RCLCPP_ERROR(this->get_logger(),
+        "Global yaw sweep unknown exception. Keeping original SC+GICP yaw.");
     }
   }
 
@@ -1459,8 +1545,8 @@ bool SmallGicpRelocalizationNode::runGlobalRelocalization(
 
   RCLCPP_WARN(
     this->get_logger(),
-    "Global relocalization ACCEPTED in %.0fms: t=[%.3f, %.3f], yaw=%.3f, "
-    "correction=%.3fm, score=%.0f",
+    "Global relocalization ACCEPTED in %.0fms: "
+    "t=[%.3f, %.3f], yaw=%.3f, correction=%.3fm, score=%.0f",
     elapsed_ms, raw_t.x(), raw_t.y(), final_yaw, correction, best_score);
 
   result_t_ = previous_result_t_ = constrained;
