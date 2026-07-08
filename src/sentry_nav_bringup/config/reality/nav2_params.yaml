@@ -28,10 +28,10 @@ point_lio:
     prop_at_freq_of_imu: True
     check_satu: True
     init_map_size: 10
-    point_filter_num: 2
+    point_filter_num: 1
     space_down_sample: True
     filter_size_surf: 0.15
-    filter_size_map: 0.2                                # Options: 0.5, 0.3, 0.15, 0.1
+    filter_size_map: 0.2                                # 加密：从 0.3 收紧以提升点云密度
     ivox_nearby_type: 18                                # Options: 0, 6, 18, 26
     runtime_pos_log_enable: False                       # Option: True
 
@@ -54,7 +54,7 @@ point_lio:
       lidar_type: 1                                     # 1 for Livox serials LiDAR, 2 for Velodyne LiDAR, 3 for ouster LiDAR
       scan_line: 4
       timestamp_unit: 3                                 # the unit of time/t field in the PointCloud2 rostopic: 0-second, 1-milisecond, 2-microsecond, 3-nanosecond.
-      blind: 0.2
+      blind: 0.1
 
     mapping:
       imu_en: True
@@ -75,9 +75,9 @@ point_lio:
       acc_cov_input: 0.1                                # for IMU as input model
       plane_thr: 0.1                                    # 0.05, the threshold for plane criteria, the smaller, the flatter a plane
       match_s: 81.0
-      ivox_grid_resolution: 0.5
-      gravity: [-0.502450413, -0.032656074, 0.863989099]                        # mid360 下倾 30° (rpy=[0, pi/6, pi] on gimbal_yaw)，建议用 sentry_tools 实测标定
-      gravity_init: [-0.502450413, -0.032656074, 0.863989099]                  # preknown gravity in the first IMU body frame, use when imu_en is False or start from a non-stationary state
+      ivox_grid_resolution: 0.3
+      gravity: [-0.513769843, -0.030131499, 0.857398764]                        # 实测标定 (1.0g单位)
+      gravity_init: [-0.513769843, -0.030131499, 0.857398764]                  # preknown gravity in the first IMU body frame, use when imu_en is False or start from a non-stationary state
       extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
       extrinsic_R: [ 1.0, 0.0, 0.0,
                      0.0, 1.0, 0.0,
@@ -106,6 +106,8 @@ odom_bridge:
     base_frame: "base_footprint"
     lidar_frame: "front_mid360"
     robot_base_frame: "gimbal_yaw"
+    smoothing_alpha: 0.50
+    velocity_smoothing_alpha: 0.30
 
 terrain_analysis:
   ros__parameters:
@@ -114,7 +116,7 @@ terrain_analysis:
     noDecayDis: 0.0                     # 点云距离阈值 小于该阈值不考虑时间差
     clearingDis: 0.0                    # 该距离外的点会被清除
     useSorting: True                    # 这个参数开起来就能上坡了；如果 use_sorting,那么就以周围点中的分位点作为地面点，否则以最低点作为地面点；周围其余点相对于地面点的高度作为通过代价，所以对于坡面，有的点的代价是正，有的是负，就相互抵消了；不要与 consider_drop 同时开启，计算上会有冲突
-    quantileZ: 0.2                      # useful if use_sorting is enabled.
+    quantileZ: 0.3                      # 30分位作为地面（提高以减少地面低估导致的误检）
     considerDrop: False                 # 考虑凹下去的地面,开启则将相对于地面点的高度取绝对值
     limitGroundLift: False
     maxGroundLift: 0.3
@@ -128,13 +130,13 @@ terrain_analysis:
     minDyObsPointNum: 1
     noDataObstacle: False               # treat no data as obstacle
     noDataBlockSkipNum: 0
-    minBlockPointNum: 5                  # 体素内最少点数（原 10，低矮/薄障碍物容易漏检）
+    minBlockPointNum: 10                  # 体素内最少点数（提高以减少稀疏点云误检）
     vehicleHeight: 0.55                  # 小于车辆高度的点才会进行处理
     voxelPointUpdateThre: 100
     voxelTimeUpdateThre: 0.5
     minRelZ: -1.5                       # min_rel_z 以及 max_rel_z 限制了有效点云点的Z值范围，用于对天花板和地板进行处理
     maxRelZ: 1.0
-    disRatioZ: 0.2
+    disRatioZ: 0.4
 
 terrain_analysis_ext:
   ros__parameters:
@@ -143,13 +145,13 @@ terrain_analysis_ext:
     noDecayDis: 0.0
     clearingDis: 10.0
     useSorting: true
-    quantileZ: 0.2
+    quantileZ: 0.3
     vehicleHeight: 0.8                  # 只保留离地面估计值 0.8m 以内的点作为障碍物
     voxelPointUpdateThre: 100
     voxelTimeUpdateThre: 0.2
     lowerBoundZ: -1.5
     upperBoundZ: 1.0
-    disRatioZ: 0.2
+    disRatioZ: 0.4
     checkTerrainConn: True
     terrainUnderVehicle: -0.75
     terrainConnThre: 0.5
@@ -175,9 +177,9 @@ small_gicp_relocalization:
     use_sim_time: false
     num_threads: 8
     num_neighbors: 20
-    global_leaf_size: 0.2
-    registered_leaf_size: 0.1
-    max_dist_sq: 9.0
+    global_leaf_size: 0.3
+    registered_leaf_size: 0.3
+    max_dist_sq: 4.0
     map_frame: "map"
     odom_frame: "odom"
     base_frame: "base_footprint"
@@ -185,37 +187,37 @@ small_gicp_relocalization:
     lidar_frame: "front_mid360"
     init_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]   # [x, y, z, roll, pitch, yaw]
     max_iterations: 50
-    accumulated_count_threshold: 50
-    min_range: 0.5
+    accumulated_count_threshold: 100
+    min_range: 0.3
     min_inlier_ratio: 0.3
-    max_fitness_error: 0.3                               # 适度放宽：0.1 过紧会误拒正确回环匹配
-    quality_convergence_threshold: 0.025                # 允许未形式收敛但实际正确的 GICP 结果通过（bag1627值）
-    enable_periodic_relocalization: true
-    relocalization_interval: 5.0                        # 更密纠偏（回环后更快响应）
-    max_correction_distance: 5.0                        # 回环漂移通常 1-3m，0.5m 会导致全部被拒
+    max_fitness_error: 0.3                               # 放宽：SC 验证需要松一点，稀疏点云下 0.2 太紧
+    quality_convergence_threshold: 0.05                 # 放宽：此环境 GICP 无法收敛到 0.025，全被拒
+    enable_periodic_relocalization: true                   # 必须开：冷启动可能不准，需要后续纠正
+    relocalization_interval: 10.0                       # 平衡：不过于频繁也不过于稀疏
+    max_correction_distance: 5.0                        # 冷启动唯一修正机会，不能拒
     emergency_max_dist_sq: 64.0                         # 8m 搜索半径
     emergency_max_correction_distance: 5.0              # 对齐 periodic 的 5m 上限
-    emergency_consecutive_failures: 3                   # ~15s 触发 emergency
-    emergency_min_score_threshold: 200000.0             # 适度放宽 emergency 准入门槛
+    emergency_consecutive_failures: 1                   # 静止重定位：首次失败立即尝试 emergency
+    emergency_min_score_threshold: 100000.0             # 降低：让 emergency 更容易触发 SC
     terrain_clearing_threshold: 0.3                     # 0.5m 以上修正清代价地图
     enable_deep_verification: true                        # 长局兜底；CPU 吃紧可改 false
-    deep_verification_interval: 30.0
-    deep_accumulated_count_threshold: 100
+    deep_verification_interval: 10.0
+    deep_accumulated_count_threshold: 50
     deep_max_dist_sq: 225.0
     deep_max_iterations: 300
-    deep_global_leaf_size: 0.05
-    deep_registered_leaf_size: 0.05
+    deep_global_leaf_size: 0.15
+    deep_registered_leaf_size: 0.15
     deep_min_inlier_ratio: 0.3
     deep_max_fitness_error: 0.5
     deep_max_correction_distance: 15.0
     deep_min_score_threshold: 500000.0
-    health_window_size: 5
-    health_unhealthy_score_threshold: 100000.0             # 降低 health 敏感度，避免误触发 SC
-    health_stale_timeout_sec: 30.0
-    enable_global_relocalization: true                 # SC 冷启动全局重定位（单候选）
-    global_min_score_threshold: 50000.0                # SC 匹配 50k 门槛（500inlier+0.05fit≈9800，可达）
-    global_max_correction_distance: 3.0                # SC 修正 3m 硬限
-    global_relocalization_min_interval_sec: 60.0       # SC 60s 冷却
+    health_window_size: 2
+    health_unhealthy_score_threshold: 500000.0             # 提高门槛：更容易触发 SC 全局重定位
+    health_stale_timeout_sec: 5.0
+    enable_global_relocalization: false                # 关闭：单帧静止全局定位歧义不可靠
+    global_min_score_threshold: 50000.0                # 提高：要求更强的 SC 匹配，减少假阳性
+    global_max_correction_distance: 20.0               # SC 一致匹配到 14m 外同一位置，1.5m 误拒
+    global_relocalization_min_interval_sec: 3.0        # 启动 3s 后触发 SC
     # The prior_pcd_file does not need to be specified since it going to be set by defaults in launch.
     # prior_pcd_file: ""
 
@@ -408,11 +410,11 @@ controller_server:
       rotation_kd: 0.3
       transform_tolerance: 0.3                           # 与 controller_server 顶层一致, 对抗 odom→map TF 滞后
       min_max_sum_error: 1.0
-      lookahead_dist: 2.0
+      lookahead_dist: 3.0
       use_velocity_scaled_lookahead_dist: true
       lookahead_time: 1.0
-      min_lookahead_dist: 1.0
-      max_lookahead_dist: 2.0
+      min_lookahead_dist: 1.5
+      max_lookahead_dist: 5.0
       use_interpolation: false
       use_rotate_to_heading: false
       use_rotate_to_heading_treshold: 0.1
@@ -451,14 +453,14 @@ local_costmap:
         footprint_clearing_enabled: true
         publish_voxel_map: false
         combination_method: 1
-        mark_threshold: 0
+        mark_threshold: 10
         origin_z: 0.0
         unknown_threshold: 5
         z_resolution: 0.05
         z_voxels: 16
         min_obstacle_height: 0.0
         max_obstacle_height: 2.0
-        min_obstacle_intensity: 0.05
+        min_obstacle_intensity: 0.15
         max_obstacle_intensity: 2.0
         observation_sources: terrain_map
         terrain_map:
@@ -497,14 +499,14 @@ global_costmap:
         footprint_clearing_enabled: true
         publish_voxel_map: false
         combination_method: 1
-        mark_threshold: 0
+        mark_threshold: 10
         origin_z: 0.0
         unknown_threshold: 5
         z_resolution: 0.05
         z_voxels: 16
         min_obstacle_height: 0.0
         max_obstacle_height: 2.0
-        min_obstacle_intensity: 0.05
+        min_obstacle_intensity: 0.15
         max_obstacle_intensity: 2.0
         observation_sources: terrain_map_ext
         terrain_map_ext:

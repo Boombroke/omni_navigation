@@ -8,9 +8,14 @@ Replaces the original matplotlib-based version (limited to ~5-10 FPS).
 """
 
 import math
+import os
 import sys
 import threading
 import time
+
+# Force pyqtgraph to use PyQt5 (not PyQt6) — avoids "Must construct a QApplication
+# before a QWidget" crash when both PyQt5 and PyQt6 are installed.
+os.environ['PYQTGRAPH_QT_LIB'] = 'PyQt5'
 
 import numpy as np
 import pyqtgraph as pg
@@ -27,7 +32,6 @@ from sensor_msgs.msg import JointState
 # OpenGL disabled by default — Intel iGPU can only serve one GL context, and
 # Gazebo simulation already takes it.  Set VIZ_OPENGL=1 to force GPU rendering
 # when running without Gazebo (e.g. real robot).
-import os
 _use_opengl = os.environ.get('VIZ_OPENGL', '0') == '1'
 pg.setConfigOptions(useOpenGL=_use_opengl, antialias=False,
                     foreground='#d0d0d0', background='#1e1e2e')

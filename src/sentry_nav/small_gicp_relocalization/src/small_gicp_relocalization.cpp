@@ -787,7 +787,43 @@ bool SmallGicpRelocalizationNode::performRegistration(bool is_periodic)
   register_->rejector.max_dist_sq = max_dist_sq_;
   register_->optimizer.max_iterations = max_iterations_;
 
-  auto result = register_->align(*target_, *source_, *target_tree_, previous_result_t_);
+  // Cold-start: multi-seed yaw sweep with expanded correspondence radius.
+  // The emergency search radius (8 m) provides a wider convergence basin than
+  // the default 2 m, giving GICP more room to escape local minima near the
+  // map origin when the robot starts from a stationary position.
+  small_gicp::RegistrationResult result;
+  if (!is_periodic) {
+    const double saved_max_dist_sq = register_->rejector.max_dist_sq;
+    register_->rejector.max_dist_sq = emergency_max_dist_sq_;
+
+    struct Seed { Eigen::Isometry3d guess; small_gicp::RegistrationResult res; double score; };
+    std::vector<Seed> seeds;
+    for (double yaw_deg : {0.0, 45.0, -45.0, 90.0, -90.0}) {
+      auto src_copy = std::make_shared<pcl::PointCloud<pcl::PointCovariance>>(*source_);
+      Seed s;
+      s.guess = previous_result_t_;
+      s.guess.linear() =
+        Eigen::AngleAxisd(yaw_deg * M_PI / 180.0, Eigen::Vector3d::UnitZ()).toRotationMatrix();
+      s.res = register_->align(*target_, *src_copy, *target_tree_, s.guess);
+      if (s.res.converged && s.res.num_inliers >= 50) {
+        s.score = static_cast<double>(s.res.num_inliers) /
+                  (s.res.error / s.res.num_inliers + 0.001);
+      }
+      seeds.push_back(s);
+    }
+    auto best = std::max_element(seeds.begin(), seeds.end(),
+      [](const Seed& a, const Seed& b) { return a.score < b.score; });
+    result = best->res;
+    register_->rejector.max_dist_sq = saved_max_dist_sq;
+
+    if (best->score > 0) {
+      RCLCPP_INFO(this->get_logger(),
+        "Cold-start yaw sweep (max_dist_sq=%.0f): best seed score=%.0f",
+        emergency_max_dist_sq_, best->score);
+    }
+  } else {
+    result = register_->align(*target_, *source_, *target_tree_, previous_result_t_);
+  }
 
   const Eigen::Vector3d t = result.T_target_source.translation();
   const Eigen::Vector3d rpy = result.T_target_source.rotation().eulerAngles(0, 1, 2);
