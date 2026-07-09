@@ -7,6 +7,17 @@
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
+namespace
+{
+/// Normalize angle to [-pi, pi)
+inline double normAngle(double a)
+{
+  while (a > M_PI) a -= 2.0 * M_PI;
+  while (a < -M_PI) a += 2.0 * M_PI;
+  return a;
+}
+}  // namespace
+
 namespace odom_bridge
 {
 
@@ -37,6 +48,11 @@ OdomBridgeNode::OdomBridgeNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<double>("smoothing_alpha", 0.3);
   this->declare_parameter<double>("velocity_smoothing_alpha", 0.15);
 
+  // Complementary filter parameters
+  this->declare_parameter<bool>("cf_enabled", true);
+  this->declare_parameter<double>("cf_tau", 15.0);
+  this->declare_parameter<double>("cf_offset_gain", 0.0005);
+
   this->get_parameter("state_estimation_topic", state_estimation_topic_);
   this->get_parameter("registered_scan_topic", registered_scan_topic_);
   this->get_parameter("odom_frame", odom_frame_);
@@ -45,6 +61,9 @@ OdomBridgeNode::OdomBridgeNode(const rclcpp::NodeOptions & options)
   this->get_parameter("robot_base_frame", robot_base_frame_);
   this->get_parameter("smoothing_alpha", smoothing_alpha_);
   this->get_parameter("velocity_smoothing_alpha", velocity_smoothing_alpha_);
+  this->get_parameter("cf_enabled", cf_enabled_);
+  this->get_parameter("cf_tau", cf_tau_);
+  this->get_parameter("cf_offset_gain", cf_offset_gain_);
 
   // Clamp alpha to valid range
   if (smoothing_alpha_ < 0.0) smoothing_alpha_ = 0.0;
@@ -54,6 +73,9 @@ OdomBridgeNode::OdomBridgeNode(const rclcpp::NodeOptions & options)
 
   RCLCPP_INFO(this->get_logger(), "Odom TF smoothing alpha: %.2f", smoothing_alpha_);
   RCLCPP_INFO(this->get_logger(), "Velocity smoothing alpha: %.2f", velocity_smoothing_alpha_);
+  RCLCPP_INFO(this->get_logger(),
+              "Complementary filter: enabled=%s tau=%.1fs offset_gain=%.4f",
+              cf_enabled_ ? "true" : "false", cf_tau_, cf_offset_gain_);
 
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
@@ -63,6 +85,14 @@ OdomBridgeNode::OdomBridgeNode(const rclcpp::NodeOptions & options)
   odometry_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("odometry", 2);
   registered_scan_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("registered_scan", 5);
   lidar_odometry_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("lidar_odometry", 5);
+
+  // Subscriptions for complementary filter
+  chassis_attitude_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(
+    "serial/chassis_attitude", rclcpp::SensorDataQoS(),
+    std::bind(&OdomBridgeNode::chassisAttitudeCallback, this, std::placeholders::_1));
+  chassis_status_sub_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
+    "serial/chassis_status", rclcpp::SensorDataQoS(),
+    std::bind(&OdomBridgeNode::chassisStatusCallback, this, std::placeholders::_1));
 
   rclcpp::QoS latched_qos(1);
   latched_qos.transient_local();
@@ -81,6 +111,29 @@ OdomBridgeNode::OdomBridgeNode(const rclcpp::NodeOptions & options)
   sync_->registerCallback(std::bind(
     &OdomBridgeNode::lidarOdometryAndPointCloudCallback, this,
     std::placeholders::_1, std::placeholders::_2));
+
+  // Direct odometry subscription — bypasses ApproximateTime sync to ensure
+  // TF and /odometry are published at the odometry rate, not gated by
+  // cloud_registered availability.
+  odometry_direct_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
+    state_estimation_topic_, rclcpp::SensorDataQoS(),
+    [this](const nav_msgs::msg::Odometry::ConstSharedPtr & msg) {
+      this->odometryCallback(msg);
+    });
+
+  // Publish an identity odom->base_footprint immediately so the TF tree is
+  // complete from startup. Without this, Nav2 costmaps activate before
+  // Point-LIO finishes IMU init and odom_bridge processes its first callback,
+  // locking onto a timestamp where odom->base_footprint doesn't exist yet,
+  // causing permanent "extrapolation into the past" errors.
+  geometry_msgs::msg::TransformStamped bootstrap_tf;
+  bootstrap_tf.header.stamp = this->get_clock()->now();
+  bootstrap_tf.header.frame_id = odom_frame_;
+  bootstrap_tf.child_frame_id = base_frame_;
+  bootstrap_tf.transform.rotation.w = 1.0;  // identity quaternion
+  tf_broadcaster_->sendTransform(bootstrap_tf);
+  RCLCPP_INFO(this->get_logger(), "Published bootstrap odom->%s identity to complete TF tree",
+              base_frame_.c_str());
 }
 
 void OdomBridgeNode::lidarOdometryAndPointCloudCallback(
@@ -90,7 +143,7 @@ void OdomBridgeNode::lidarOdometryAndPointCloudCallback(
   if (!base_frame_to_lidar_initialized_) {
     try {
       const auto tf_stamped = tf_buffer_->lookupTransform(
-        base_frame_, lidar_frame_, tf2::TimePointZero);
+        base_frame_, lidar_frame_, odometry_msg->header.stamp, tf2::durationFromSec(0.05));
       tf2::Transform tf_base_frame_to_lidar;
       tf2::fromMsg(tf_stamped.transform, tf_base_frame_to_lidar);
 
@@ -119,69 +172,14 @@ void OdomBridgeNode::lidarOdometryAndPointCloudCallback(
   pcl_ros::transformPointCloud(
     odom_frame_, tf_odom_to_lidar_odom_, *pcd_msg, registered_scan_in_odom);
 
-  tf2::Transform tf_lidar_odom_to_lidar;
-  tf2::fromMsg(odometry_msg->pose.pose, tf_lidar_odom_to_lidar);
-  tf2::Transform tf_odom_to_lidar = tf_odom_to_lidar_odom_ * tf_lidar_odom_to_lidar;
-
-  // --- EMA low-pass filter on odom->lidar pose (eliminates Point-LIO micro-jitter in RViz) ---
-  if (smoothing_alpha_ > 0.0) {
-    const auto & origin = tf_odom_to_lidar.getOrigin();
-    double roll, pitch, yaw;
-    tf2::Matrix3x3(tf_odom_to_lidar.getRotation()).getRPY(roll, pitch, yaw);
-
-    if (!smoothing_initialized_) {
-      filtered_transform_ = tf_odom_to_lidar;
-      filtered_yaw_ = yaw;
-      smoothing_initialized_ = true;
-    } else {
-      const double a = smoothing_alpha_;
-      const auto & fx = filtered_transform_.getOrigin().x();
-      const auto & fy = filtered_transform_.getOrigin().y();
-      const auto & fz = filtered_transform_.getOrigin().z();
-      tf_odom_to_lidar.setOrigin(tf2::Vector3(
-        a * origin.x() + (1.0 - a) * fx,
-        a * origin.y() + (1.0 - a) * fy,
-        a * origin.z() + (1.0 - a) * fz));
-
-      // Filter yaw with wrap-around handling
-      double dyaw = yaw - filtered_yaw_;
-      while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
-      while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
-      filtered_yaw_ += a * dyaw;
-      while (filtered_yaw_ > M_PI) filtered_yaw_ -= 2.0 * M_PI;
-      while (filtered_yaw_ < -M_PI) filtered_yaw_ += 2.0 * M_PI;
-
-      tf2::Quaternion q_f;
-      q_f.setRPY(0.0, 0.0, filtered_yaw_);
-      tf_odom_to_lidar.setRotation(q_f);
-      filtered_transform_ = tf_odom_to_lidar;
-    }
-  }
-  // --- End EMA filter ---
-
-  const tf2::Transform tf_lidar_to_chassis =
-    getTransform(lidar_frame_, base_frame_, pcd_msg->header.stamp);
-  const tf2::Transform tf_lidar_to_robot_base =
-    getTransform(lidar_frame_, robot_base_frame_, pcd_msg->header.stamp);
-
-  tf2::Transform tf_odom_to_chassis = tf_odom_to_lidar * tf_lidar_to_chassis;
-  const tf2::Transform tf_odom_to_robot_base = tf_odom_to_lidar * tf_lidar_to_robot_base;
-
+  // Use the latest odom->lidar pose from the high-frequency direct odometry
+  // callback. This decouples point-cloud processing from TF/odometry publishing:
+  // clouds publish whenever the sync fires, TF publishes at odometry rate.
+  tf2::Transform tf_odom_to_lidar;
   {
-    const auto & origin = tf_odom_to_chassis.getOrigin();
-    tf2::Quaternion q = tf_odom_to_chassis.getRotation();
-    double roll;
-    double pitch;
-    double yaw;
-    tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
-    tf_odom_to_chassis.setOrigin(tf2::Vector3(origin.x(), origin.y(), 0.0));
-    tf2::Quaternion q_2d;
-    q_2d.setRPY(0.0, 0.0, yaw);
-    tf_odom_to_chassis.setRotation(q_2d);
+    std::lock_guard<std::mutex> lock(odom_mutex_);
+    tf_odom_to_lidar = latest_tf_odom_to_lidar_;
   }
-
-  publishTransform(tf_odom_to_chassis, odom_frame_, base_frame_, pcd_msg->header.stamp);
-  publishOdometry(tf_odom_to_robot_base, odom_frame_, robot_base_frame_, pcd_msg->header.stamp);
 
   sensor_msgs::msg::PointCloud2 sensor_scan;
   pcl_ros::transformPointCloud(
@@ -203,20 +201,200 @@ void OdomBridgeNode::lidarOdometryAndPointCloudCallback(
   }
 }
 
+void OdomBridgeNode::odometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr & msg)
+{
+  // --- One-time initialization (same logic as sync callback) ---
+  if (!base_frame_to_lidar_initialized_) {
+    try {
+      const auto tf_stamped = tf_buffer_->lookupTransform(
+        base_frame_, lidar_frame_, msg->header.stamp, tf2::durationFromSec(0.05));
+      tf2::Transform tf_base_frame_to_lidar;
+      tf2::fromMsg(tf_stamped.transform, tf_base_frame_to_lidar);
+
+      tf2::Transform tf_lidar_odom_to_lidar_t0;
+      tf2::fromMsg(msg->pose.pose, tf_lidar_odom_to_lidar_t0);
+      tf_odom_to_lidar_odom_ = tf_base_frame_to_lidar * tf_lidar_odom_to_lidar_t0.inverse();
+
+      base_frame_to_lidar_initialized_ = true;
+
+      geometry_msgs::msg::TransformStamped odom_to_lidar_odom_msg;
+      odom_to_lidar_odom_msg.header.stamp = msg->header.stamp;
+      odom_to_lidar_odom_msg.header.frame_id = odom_frame_;
+      odom_to_lidar_odom_msg.child_frame_id = "lidar_odom";
+      odom_to_lidar_odom_msg.transform = tf2::toMsg(tf_odom_to_lidar_odom_);
+      odom_to_lidar_odom_pub_->publish(odom_to_lidar_odom_msg);
+    } catch (tf2::TransformException & ex) {
+      RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s. Retrying...", ex.what());
+      return;
+    }
+  }
+
+  // --- Compute odom -> lidar from Point-LIO pose ---
+  tf2::Transform tf_lidar_odom_to_lidar;
+  tf2::fromMsg(msg->pose.pose, tf_lidar_odom_to_lidar);
+  tf2::Transform tf_odom_to_lidar = tf_odom_to_lidar_odom_ * tf_lidar_odom_to_lidar;
+
+  // Cache for point cloud callback (replaces sync-derived value)
+  {
+    std::lock_guard<std::mutex> lock(odom_mutex_);
+    latest_tf_odom_to_lidar_ = tf_odom_to_lidar;
+    latest_odom_stamp_ = msg->header.stamp;
+  }
+
+  // --- EMA low-pass filter ---
+  if (smoothing_alpha_ > 0.0) {
+    const auto & origin = tf_odom_to_lidar.getOrigin();
+    double roll, pitch, yaw;
+    tf2::Matrix3x3(tf_odom_to_lidar.getRotation()).getRPY(roll, pitch, yaw);
+
+    if (!smoothing_initialized_) {
+      filtered_transform_ = tf_odom_to_lidar;
+      filtered_yaw_ = yaw;
+      smoothing_initialized_ = true;
+    } else {
+      const double a = smoothing_alpha_;
+      const auto & fx = filtered_transform_.getOrigin().x();
+      const auto & fy = filtered_transform_.getOrigin().y();
+      const auto & fz = filtered_transform_.getOrigin().z();
+      tf_odom_to_lidar.setOrigin(tf2::Vector3(
+        a * origin.x() + (1.0 - a) * fx,
+        a * origin.y() + (1.0 - a) * fy,
+        a * origin.z() + (1.0 - a) * fz));
+
+      double dyaw = yaw - filtered_yaw_;
+      while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
+      while (dyaw < -M_PI) dyaw += 2.0 * M_PI;
+      filtered_yaw_ += a * dyaw;
+      while (filtered_yaw_ > M_PI) filtered_yaw_ -= 2.0 * M_PI;
+      while (filtered_yaw_ < -M_PI) filtered_yaw_ += 2.0 * M_PI;
+
+      tf2::Quaternion q_f;
+      q_f.setRPY(0.0, 0.0, filtered_yaw_);
+      tf_odom_to_lidar.setRotation(q_f);
+      filtered_transform_ = tf_odom_to_lidar;
+    }
+  }
+
+  // --- Compute odom -> base_footprint via TF lookup at message time ---
+  const tf2::Transform tf_lidar_to_chassis =
+    getTransform(lidar_frame_, base_frame_, msg->header.stamp);
+  tf2::Transform tf_odom_to_chassis = tf_odom_to_lidar * tf_lidar_to_chassis;
+
+  // 2D constraint: z=0, roll=0, pitch=0
+  // Complementary filter corrects only the chassis yaw (odom→base_footprint TF).
+  // /odometry (odom→gimbal_yaw) is intentionally left uncorrected — it correctly
+  // represents gimbal_yaw's orientation which includes real gimbal rotation.
+  {
+    const auto & origin = tf_odom_to_chassis.getOrigin();
+    tf2::Quaternion q = tf_odom_to_chassis.getRotation();
+    double roll, pitch, yaw;
+    tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+    tf_odom_to_chassis.setOrigin(tf2::Vector3(origin.x(), origin.y(), 0.0));
+
+    // --- Complementary filter: fuse MCU chassis_yaw (gimbal-immune, drifts)
+    //     with Point-LIO derived yaw (gimbal-contaminated, no drift) ---
+    double yaw_clean = yaw;
+    if (cf_enabled_ && chassis_yaw_received_) {
+      double yaw_mcu;
+      int mode;
+      {
+        std::lock_guard<std::mutex> lock(chassis_state_mutex_);
+        yaw_mcu = chassis_yaw_mcu_;
+        mode = chassis_mode_;
+      }
+
+      // Align MCU IMU frame to odom frame via slowly-estimated offset
+      if (!cf_offset_initialized_) {
+        cf_yaw_offset_ = yaw - yaw_mcu;
+        cf_offset_initialized_ = true;
+      }
+      double yaw_mcu_aligned = yaw_mcu + cf_yaw_offset_;
+
+      // Clamp aligned MCU yaw to be near raw odom yaw (avoid ±2π jumps)
+      yaw_mcu_aligned = yaw + normAngle(yaw_mcu_aligned - yaw);
+
+      // Slowly update offset estimate — only in normal mode (not spin)
+      if (mode == 0) {
+        double offset_error = normAngle(yaw - (yaw_mcu + cf_yaw_offset_));
+        cf_yaw_offset_ += cf_offset_gain_ * offset_error;
+      }
+
+      // Initialize bias
+      if (!cf_yaw_initialized_) {
+        cf_bias_ = 0.0;
+        cf_yaw_initialized_ = true;
+      }
+
+      // Compute filter alpha from time constant + fixed dt estimate
+      // (odom callback fires at ~100-200 Hz → dt ≈ 5-10 ms; tau=15s → α ≈ 0.0003-0.0007)
+      constexpr double kDt = 0.01;  // conservative fixed step for stability
+      double alpha = kDt / (cf_tau_ + kDt);
+
+      // During spin modes, bypass filter (trust odom fully — chassis IS rotating fast)
+      if (mode == 1 || mode == 2) {
+        alpha = 0.0;
+      }
+
+      // Core: bias slowly tracks MCU→odom discrepancy
+      double error = normAngle(yaw_mcu_aligned - yaw);
+      cf_bias_ += alpha * normAngle(error - cf_bias_);
+      yaw_clean = yaw + cf_bias_;
+    }
+
+    double chassis_yaw_clean = normAngle(yaw_clean);
+    tf2::Quaternion q_2d;
+    q_2d.setRPY(0.0, 0.0, chassis_yaw_clean);
+    tf_odom_to_chassis.setRotation(q_2d);
+  }
+
+  // --- Rate-limited publish ---
+  // Use steady_clock to avoid incompatible clock-source errors when
+  // subtracting rclcpp::Time objects that may have different clock types.
+  auto now = std::chrono::steady_clock::now();
+
+  if (last_tf_publish_time_ == std::chrono::steady_clock::time_point{} ||
+      std::chrono::duration<double>(now - last_tf_publish_time_).count() >= MIN_TF_PUBLISH_INTERVAL) {
+    publishTransform(tf_odom_to_chassis, odom_frame_, base_frame_, msg->header.stamp);
+    last_tf_publish_time_ = now;
+  }
+
+  if (last_odom_publish_time_ == std::chrono::steady_clock::time_point{} ||
+      std::chrono::duration<double>(now - last_odom_publish_time_).count() >= MIN_ODOM_PUBLISH_INTERVAL) {
+    const tf2::Transform tf_lidar_to_robot_base =
+      getTransform(lidar_frame_, robot_base_frame_, msg->header.stamp);
+    const tf2::Transform tf_odom_to_robot_base = tf_odom_to_lidar * tf_lidar_to_robot_base;
+    publishOdometry(tf_odom_to_robot_base, odom_frame_, robot_base_frame_, msg->header.stamp);
+    last_odom_publish_time_ = now;
+  }
+}
+
 tf2::Transform OdomBridgeNode::getTransform(
   const std::string & target_frame, const std::string & source_frame, const rclcpp::Time & time)
 {
   try {
-    // Use TimePointZero (latest available) instead of exact timestamp.
-    // Static URDF transforms (base_footprint->front_mid360 etc.) are published
-    // by robot_state_publisher slightly behind Point-LIO timestamps, causing
-    // "extrapolation into the future" errors. Latest-value lookup is correct
-    // for static transforms and eliminates the associated position glitches.
+    // Use the actual message timestamp so that dynamic transforms (e.g. gimbal yaw
+    // joint) are queried at the same time as the Point-LIO odometry. This ensures the
+    // gimbal rotation cancels out when computing odom->base_footprint:
+    //   odom->base = (odom->lidar at T) * (base->lidar at T)^-1
+    // A small tolerance is needed because robot_state_publisher publishes URDF
+    // transforms slightly behind the high-frequency Point-LIO timestamps.
     const auto transform_stamped = tf_buffer_->lookupTransform(
-      target_frame, source_frame, tf2::TimePointZero);
+      target_frame, source_frame, time, tf2::durationFromSec(0.05));
     tf2::Transform transform;
     tf2::fromMsg(transform_stamped.transform, transform);
     return transform;
+  } catch (const tf2::ExtrapolationException & ex) {
+    // Fallback to latest available transform if the requested time is too new
+    try {
+      const auto transform_stamped = tf_buffer_->lookupTransform(
+        target_frame, source_frame, tf2::TimePointZero);
+      tf2::Transform transform;
+      tf2::fromMsg(transform_stamped.transform, transform);
+      return transform;
+    } catch (tf2::TransformException & ex2) {
+      RCLCPP_WARN(this->get_logger(), "TF lookup fallback failed: %s. Returning identity.", ex2.what());
+      return tf2::Transform::getIdentity();
+    }
   } catch (tf2::TransformException & ex) {
     RCLCPP_WARN(this->get_logger(), "TF lookup failed: %s. Returning identity.", ex.what());
     return tf2::Transform::getIdentity();
@@ -303,7 +481,38 @@ void OdomBridgeNode::publishOdometry(
   odometry_pub_->publish(out);
 }
 
+void OdomBridgeNode::chassisAttitudeCallback(
+  const sensor_msgs::msg::JointState::SharedPtr msg)
+{
+  // Extract chassis_yaw from serial/chassis_attitude
+  // msg->name = {"chassis_pitch", "chassis_yaw"}
+  auto it_yaw = std::find(msg->name.begin(), msg->name.end(), "chassis_yaw");
+  if (it_yaw == msg->name.end()) {
+    return;
+  }
+  auto idx = static_cast<size_t>(std::distance(msg->name.begin(), it_yaw));
+  if (idx >= msg->position.size()) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(chassis_state_mutex_);
+  chassis_yaw_mcu_ = static_cast<double>(msg->position[idx]);
+  chassis_yaw_received_ = true;
 }
+
+void OdomBridgeNode::chassisStatusCallback(
+  const std_msgs::msg::Float32MultiArray::SharedPtr msg)
+{
+  // serial/chassis_status = [chassis_power, chassis_mode]
+  if (msg->data.size() < 2) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(chassis_state_mutex_);
+  chassis_mode_ = static_cast<int>(msg->data[1]);
+}
+
+}  // namespace odom_bridge
 
 #include "rclcpp_components/register_node_macro.hpp"
 

@@ -84,7 +84,7 @@ point_lio:
                      0.0, 0.0, 1.0 ]
 
     odometry:
-      publish_odometry_without_downsample: True
+      publish_odometry_without_downsample: False
 
     publish:
       path_en: False                                    # False: close the path output
@@ -108,6 +108,12 @@ odom_bridge:
     robot_base_frame: "gimbal_yaw"
     smoothing_alpha: 0.50
     velocity_smoothing_alpha: 0.30
+    # --- Complementary filter: fuse MCU chassis_yaw with Point-LIO derived yaw ---
+    # MCU chassis_yaw is gimbal-immune but drifts; Point-LIO yaw has gimbal leak but no drift.
+    # The filter high-passes odom yaw and low-passes MCU yaw to get clean chassis heading.
+    cf_enabled: true                        # enable complementary filter
+    cf_tau: 15.0                            # time constant [s]; below this trust odom, above trust MCU
+    cf_offset_gain: 0.0005                  # MCU↔odom frame offset estimation rate (very slow)
 
 terrain_analysis:
   ros__parameters:
@@ -193,7 +199,7 @@ small_gicp_relocalization:
     max_fitness_error: 0.3                               # 放宽：SC 验证需要松一点，稀疏点云下 0.2 太紧
     quality_convergence_threshold: 0.05                 # 放宽：此环境 GICP 无法收敛到 0.025，全被拒
     enable_periodic_relocalization: true                   # 必须开：冷启动可能不准，需要后续纠正
-    relocalization_interval: 10.0                       # 平衡：不过于频繁也不过于稀疏
+    relocalization_interval: 5.0                       # 平衡：不过于频繁也不过于稀疏
     max_correction_distance: 5.0                        # 冷启动唯一修正机会，不能拒
     emergency_max_dist_sq: 64.0                         # 8m 搜索半径
     emergency_max_correction_distance: 5.0              # 对齐 periodic 的 5m 上限

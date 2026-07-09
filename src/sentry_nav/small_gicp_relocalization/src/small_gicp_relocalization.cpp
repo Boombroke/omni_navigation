@@ -255,8 +255,8 @@ SmallGicpRelocalizationNode::SmallGicpRelocalizationNode(const rclcpp::NodeOptio
 
   RCLCPP_INFO(
     this->get_logger(),
-    "Manual override: send to /initialpose to lock map->odom. "
-    "Re-send to fine-tune. Restart node to re-enable automatic relocalization.");
+    "Manual override: send to /initialpose to seed map->odom. "
+    "GICP will continue refining near the seeded pose. Re-send to update.");
 }
 
 void SmallGicpRelocalizationNode::loadPcdFile(const std::string & file_name)
@@ -984,7 +984,7 @@ void SmallGicpRelocalizationNode::initialPoseCallback(
   RCLCPP_WARN(
     this->get_logger(),
     "Manual initial pose received: frame=%s, [x=%.3f, y=%.3f]. "
-    "ALL automatic relocalization will be DISABLED until node restart.",
+    "Using as GICP seed — relocalization will continue refining near this pose.",
     msg->header.frame_id.c_str(), msg->pose.pose.position.x, msg->pose.pose.position.y);
 
   // Interpret /initialpose as map -> base_footprint (RViz default).
@@ -1039,7 +1039,6 @@ void SmallGicpRelocalizationNode::initialPoseCallback(
   previous_result_t_ = result_t_ = constrained;
   has_localized_.store(true);
   consecutive_periodic_failures_ = 0;
-  manual_pose_locked_.store(true);
 
   // Clear accumulators so next time we unlock (via restart) we start fresh.
   {
@@ -1061,7 +1060,7 @@ void SmallGicpRelocalizationNode::initialPoseCallback(
   RCLCPP_WARN(
     this->get_logger(),
     "Manual pose ACCEPTED: map->odom = [%.3f, %.3f, yaw=%.3f rad]. "
-    "All automatic relocalization is now LOCKED. Drag again in RViz to fine-tune.",
+    "GICP will continue refining from this seed. Drag again in RViz to update.",
     t.x(), t.y(), yaw);
 }
 
