@@ -23,7 +23,9 @@
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_broadcaster.h"
+#include "tf2_ros/transform_listener.h"
 
 namespace fake_vel_transform
 {
@@ -38,6 +40,9 @@ private:
   void publishTransform();
   geometry_msgs::msg::Twist transformVelocity(
     const geometry_msgs::msg::Twist & twist, float yaw_diff);
+  // 取 odom→robot_base_frame(gimbal_yaw) 在指定时刻的 yaw。优先经高频(200Hz+)
+  // 云台关节 TF 插值到 stamp，避免 13Hz odom 欠采样；查询失败回退到 odom 回调存的最近值。
+  double getRobotBaseAngle(const rclcpp::Time & stamp);
 
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_vel_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
@@ -45,9 +50,12 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_chassis_pub_;
 
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
   rclcpp::TimerBase::SharedPtr timer_;
 
+  std::string odom_frame_;
   std::string robot_base_frame_;
   std::string fake_robot_base_frame_;
   std::string odom_topic_;
