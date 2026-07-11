@@ -241,14 +241,28 @@ void OdomBridgeNode::odometryCallback(const nav_msgs::msg::Odometry::ConstShared
     latest_odom_stamp_ = msg->header.stamp;
   }
 
-  // --- EMA low-pass filter ---
+  // --- Cancel lever-arm / gimbal rotation BEFORE EMA (Scheme B) ---
+  // Performing the cancellation on the raw 3D lidar pose ensures R_static
+  // (the LiDAR mount orientation, incl. ~pi/6 pitch) pairs perfectly with
+  // (lidar->base)^-1 from the TF tree. The resulting odom->chassis is already
+  // approximately 2D (roll≈0, pitch≈0, z≈0), so applying EMA afterwards — even
+  // if it zeroes roll/pitch — cannot break the R_static pairing.
+  const tf2::Transform tf_lidar_to_chassis =
+    getTransform(lidar_frame_, base_frame_, msg->header.stamp);
+  tf2::Transform tf_odom_to_chassis = tf_odom_to_lidar * tf_lidar_to_chassis;
+
+  // --- EMA low-pass filter on the chassis pose ---
+  // Chassis is horizontal (no R_static), so EMA on x/y/yaw is safe. Roll/pitch
+  // are smoothed but will be zeroed by the 2D constraint below regardless.
   if (smoothing_alpha_ > 0.0) {
-    const auto & origin = tf_odom_to_lidar.getOrigin();
+    const auto & origin = tf_odom_to_chassis.getOrigin();
     double roll, pitch, yaw;
-    tf2::Matrix3x3(tf_odom_to_lidar.getRotation()).getRPY(roll, pitch, yaw);
+    tf2::Matrix3x3(tf_odom_to_chassis.getRotation()).getRPY(roll, pitch, yaw);
 
     if (!smoothing_initialized_) {
-      filtered_transform_ = tf_odom_to_lidar;
+      filtered_transform_ = tf_odom_to_chassis;
+      filtered_roll_ = roll;
+      filtered_pitch_ = pitch;
       filtered_yaw_ = yaw;
       smoothing_initialized_ = true;
     } else {
@@ -256,10 +270,13 @@ void OdomBridgeNode::odometryCallback(const nav_msgs::msg::Odometry::ConstShared
       const auto & fx = filtered_transform_.getOrigin().x();
       const auto & fy = filtered_transform_.getOrigin().y();
       const auto & fz = filtered_transform_.getOrigin().z();
-      tf_odom_to_lidar.setOrigin(tf2::Vector3(
+      tf_odom_to_chassis.setOrigin(tf2::Vector3(
         a * origin.x() + (1.0 - a) * fx,
         a * origin.y() + (1.0 - a) * fy,
         a * origin.z() + (1.0 - a) * fz));
+
+      filtered_roll_ += a * (roll - filtered_roll_);
+      filtered_pitch_ += a * (pitch - filtered_pitch_);
 
       double dyaw = yaw - filtered_yaw_;
       while (dyaw > M_PI) dyaw -= 2.0 * M_PI;
@@ -269,21 +286,22 @@ void OdomBridgeNode::odometryCallback(const nav_msgs::msg::Odometry::ConstShared
       while (filtered_yaw_ < -M_PI) filtered_yaw_ += 2.0 * M_PI;
 
       tf2::Quaternion q_f;
-      q_f.setRPY(0.0, 0.0, filtered_yaw_);
-      tf_odom_to_lidar.setRotation(q_f);
-      filtered_transform_ = tf_odom_to_lidar;
+      q_f.setRPY(filtered_roll_, filtered_pitch_, filtered_yaw_);
+      tf_odom_to_chassis.setRotation(q_f);
+      filtered_transform_ = tf_odom_to_chassis;
     }
   }
 
-  // --- Compute odom -> base_footprint via TF lookup at message time ---
-  const tf2::Transform tf_lidar_to_chassis =
-    getTransform(lidar_frame_, base_frame_, msg->header.stamp);
-  tf2::Transform tf_odom_to_chassis = tf_odom_to_lidar * tf_lidar_to_chassis;
+  // Save EMA-smoothed chassis copy before 2D constraint / complementary filter.
+  // /odometry (odom→gimbal_yaw) is intentionally left uncorrected — it
+  // correctly represents gimbal_yaw's orientation including real gimbal
+  // rotation. Derived from the smoothed chassis rather than the raw lidar
+  // pose to keep the EMA jitter suppression on the odometry output.
+  const tf2::Transform tf_odom_to_chassis_smoothed = tf_odom_to_chassis;
 
   // 2D constraint: z=0, roll=0, pitch=0
   // Complementary filter corrects only the chassis yaw (odom→base_footprint TF).
-  // /odometry (odom→gimbal_yaw) is intentionally left uncorrected — it correctly
-  // represents gimbal_yaw's orientation which includes real gimbal rotation.
+  // /odometry (odom→gimbal_yaw) uses the smoothed copy above, NOT this 2D / CF output.
   {
     const auto & origin = tf_odom_to_chassis.getOrigin();
     tf2::Quaternion q = tf_odom_to_chassis.getRotation();
@@ -360,9 +378,10 @@ void OdomBridgeNode::odometryCallback(const nav_msgs::msg::Odometry::ConstShared
 
   if (last_odom_publish_time_ == std::chrono::steady_clock::time_point{} ||
       std::chrono::duration<double>(now - last_odom_publish_time_).count() >= MIN_ODOM_PUBLISH_INTERVAL) {
-    const tf2::Transform tf_lidar_to_robot_base =
-      getTransform(lidar_frame_, robot_base_frame_, msg->header.stamp);
-    const tf2::Transform tf_odom_to_robot_base = tf_odom_to_lidar * tf_lidar_to_robot_base;
+    const tf2::Transform tf_chassis_to_robot_base =
+      getTransform(base_frame_, robot_base_frame_, msg->header.stamp);
+    const tf2::Transform tf_odom_to_robot_base =
+      tf_odom_to_chassis_smoothed * tf_chassis_to_robot_base;
     publishOdometry(tf_odom_to_robot_base, odom_frame_, robot_base_frame_, msg->header.stamp);
     last_odom_publish_time_ = now;
   }

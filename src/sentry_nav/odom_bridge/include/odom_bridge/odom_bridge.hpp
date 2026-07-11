@@ -96,10 +96,12 @@ private:
   tf2::Transform previous_transform_;
   std::chrono::steady_clock::time_point previous_time_;
 
-  // EMA smoothing for odom->base TF (eliminates Point-LIO micro-jitter in RViz)
+  // EMA smoothing for odom->lidar pose (eliminates Point-LIO micro-jitter in RViz)
   double smoothing_alpha_;
   bool smoothing_initialized_;
   tf2::Transform filtered_transform_;
+  double filtered_roll_;
+  double filtered_pitch_;
   double filtered_yaw_;
 
   // EMA smoothing for odometry twist (suppresses finite-difference velocity noise)
