@@ -37,7 +37,15 @@ private:
   void odometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr & msg);
   void cmdVelCallback(const geometry_msgs::msg::TwistStamped::SharedPtr msg);
   void cmdSpinCallback(example_interfaces::msg::Float32::SharedPtr msg);
-  void publishTransform();
+
+  /**
+   * @brief 发布 robot_base_frame → fake_robot_base_frame 的反向旋转 TF。
+   *
+   * @param angle 反自旋补偿角 (rad)
+   * @param stamp 该角度对应的【真实】时刻 —— 必须是角度来源 (/odometry) 的
+   *        header.stamp, 不能用 now()。见 odometryCallback 注释。
+   */
+  void publishTransform(double angle, const rclcpp::Time & stamp);
   geometry_msgs::msg::Twist transformVelocity(
     const geometry_msgs::msg::Twist & twist, float yaw_diff);
 
@@ -48,8 +56,6 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_chassis_pub_;
 
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-
-  rclcpp::TimerBase::SharedPtr timer_;
 
   std::string robot_base_frame_;
   std::string fake_robot_base_frame_;

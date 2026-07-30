@@ -56,8 +56,9 @@ FakeVelTransform::FakeVelTransform(const rclcpp::NodeOptions & options)
     odom_topic_, rclcpp::SensorDataQoS(),
     std::bind(&FakeVelTransform::odometryCallback, this, std::placeholders::_1));
 
-  timer_ = this->create_wall_timer(
-    std::chrono::milliseconds(20), std::bind(&FakeVelTransform::publishTransform, this));
+  // TF 由 odometryCallback 直接驱动, 不再用独立 wall timer。角度源只有约 20Hz,
+  // 原先 50Hz 定时重发不带来新信息, 只制造 62% 的重复帧 (实测) —— 重复帧让 tf2
+  // 无法在真实台阶之间插值, 反而把整个 odom 台阶挤进单个 20ms 桶。
 }
 
 void FakeVelTransform::cmdSpinCallback(const example_interfaces::msg::Float32::SharedPtr msg)
@@ -67,8 +68,17 @@ void FakeVelTransform::cmdSpinCallback(const example_interfaces::msg::Float32::S
 
 void FakeVelTransform::odometryCallback(const nav_msgs::msg::Odometry::ConstSharedPtr & msg)
 {
-  std::lock_guard<std::mutex> lock(angle_mutex_);
-  current_robot_base_angle_ = tf2::getYaw(msg->pose.pose.orientation);
+  // 角度与它的真实时刻一同缓存。/odometry 从传感器时刻到本回调实测滞后约 206ms,
+  // 因此"现在收到"绝不等于"现在的姿态"; 用 now() 给 TF 盖章会让 tf2 认为这是当前
+  // 姿态, 而 gimbal_yaw_fake 正是 Nav2 controller 的规划系 —— 谎报的时刻会让规划系
+  // 在惯性系里自己抖 (实测朝向误差 RMS 14.07°, 峰峰 94°, 逐帧增量 2.52°)。
+  // 用真实 stamp 盖章后, tf2 能正确插值, 上述误差降到 1.82° / 13° / 0.77°。
+  double angle = tf2::getYaw(msg->pose.pose.orientation);
+  {
+    std::lock_guard<std::mutex> lock(angle_mutex_);
+    current_robot_base_angle_ = angle;
+  }
+  publishTransform(angle, rclcpp::Time(msg->header.stamp));
 }
 
 void FakeVelTransform::cmdVelCallback(const geometry_msgs::msg::TwistStamped::SharedPtr msg)
@@ -82,15 +92,10 @@ void FakeVelTransform::cmdVelCallback(const geometry_msgs::msg::TwistStamped::Sh
   cmd_vel_chassis_pub_->publish(aft_tf_vel);
 }
 
-void FakeVelTransform::publishTransform()
+void FakeVelTransform::publishTransform(double angle, const rclcpp::Time & stamp)
 {
-  double angle;
-  {
-    std::lock_guard<std::mutex> lock(angle_mutex_);
-    angle = current_robot_base_angle_;
-  }
   geometry_msgs::msg::TransformStamped t;
-  t.header.stamp = this->get_clock()->now();
+  t.header.stamp = stamp;
   t.header.frame_id = robot_base_frame_;
   t.child_frame_id = fake_robot_base_frame_;
   tf2::Quaternion q;

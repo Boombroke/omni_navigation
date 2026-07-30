@@ -178,6 +178,10 @@ void OmniPidPursuitController::configure(
     translation_ki_);
   heading_pid_ = std::make_shared<PID>(
     control_duration_, v_angular_max_, v_angular_min_, rotation_kp_, rotation_kd_, rotation_ki_);
+
+  // 降速斜坡的起点。setPlan 不再复位它 (见 setPlan 注释), 故只在生命周期起点初始化。
+  last_curvature_ = 0.0;
+  last_velocity_scaling_factor_ = v_linear_max_;
 }
 
 void OmniPidPursuitController::cleanup()
@@ -339,9 +343,12 @@ geometry_msgs::msg::TwistStamped OmniPidPursuitController::computeVelocityComman
 
 void OmniPidPursuitController::setPlan(const nav_msgs::msg::Path & path)
 {
+  // 只换路径, 不复位曲率 EMA / 降速斜坡状态。BT 以 1Hz 重规划, 若在此把
+  // last_velocity_scaling_factor_ 拉回 v_linear_max_, 每次 replan 都会让底盘瞬间
+  // 窜回满速再重新慢慢降 (实测 1.0 m/s 台阶, 占速度抖动能量的 91%)。
+  // 这两个量是对"路径形状"的低通估计, 而 replan 前后路径几乎不变 (实测终点跳变
+  // median 0.000m), 因此跨 replan 保持连续才是正确语义。
   global_plan_ = path;
-  last_curvature_ = 0.0;
-  last_velocity_scaling_factor_ = v_linear_max_;
 }
 
 void OmniPidPursuitController::setSpeedLimit(

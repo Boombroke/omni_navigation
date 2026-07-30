@@ -430,12 +430,18 @@ controller_server:
       v_linear_max: 1.5
       v_angular_min: -1.5
       v_angular_max: 1.5
+      # curvature_max 1.2→2.0: local_plan 点距 0.05m (= costmap 分辨率), 栅格锯齿在
+      # 1.1m 曲率窗口上的等效曲率约 0.33, 实测 curv p95=1.20 (半径 0.84m) 多为栅格
+      # 假象而非真弯道; 1.2 让 45% 的时间在降速。加宽过渡带使降速幅度与真实弯度成比例。
       curvature_min: 0.5
-      curvature_max: 1.2
+      curvature_max: 2.0
       reduction_ratio_at_high_curvature: 0.3
       curvature_forward_dist: 0.8
       curvature_backward_dist: 0.3
-      max_velocity_scaling_factor_rate: 2.0
+      # 2.0→1.5: 降低降速斜坡速率以抑制锯齿。取值上限由 lookahead 决定 —— 满速 1.5m/s
+      # 降到 0.45m/s 需 (1.5-0.45)/1.5=0.7s, 即 1.05m 提前量, 必须 < min_lookahead_dist
+      # (1.5m) 才能在进弯前降到位; 故不可再低 (0.5 需 3.15m 提前量, 会来不及减速)。
+      max_velocity_scaling_factor_rate: 1.5
 
 
 local_costmap:
